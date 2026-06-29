@@ -77,7 +77,7 @@ async function handleRayAPI(req, res) {
     return;
   }
 
-  const { systemPrompt, messages } = parsed;
+  const { systemPrompt, messages, model } = parsed;
 
   if (!systemPrompt || !messages) {
     res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -95,8 +95,8 @@ async function handleRayAPI(req, res) {
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify({
-        model: 'claude-haiku-4-5-20251001',
-        max_tokens: 300,
+        model: model || 'claude-haiku-4-5-20251001',
+        max_tokens: 500,
         system: systemPrompt,
         messages: messages,
       }),
