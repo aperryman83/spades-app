@@ -613,7 +613,7 @@ styleEl.textContent = `
     transition: max-height 0.3s ease;
   }
   #ray-panel.ray-panel--active {
-    max-height: 30vh;
+    max-height: 20vh;
     border-top: 2px solid var(--color-accent-gold);
     border-bottom: 1px solid rgba(200, 148, 26, 0.25);
   }
@@ -829,6 +829,43 @@ styleEl.textContent = `
   .card--empty {
     border: 1px dashed var(--color-border);
     background: transparent;
+  }
+
+  /* ── Desktop: Ray panel as right sidebar (≥ 760px) ──────────────────────── */
+  @media (min-width: 760px) {
+    /* Switch from bottom drawer to fixed right column */
+    #ray-panel {
+      top: 0;
+      bottom: 0 !important;
+      right: 0;
+      left: auto !important;
+      width: 320px;
+      max-height: 100vh !important;
+      overflow: hidden;
+      border-left: 1px solid var(--color-border);
+      border-top: none !important;
+      border-bottom: none !important;
+      /* Fade in/out instead of slide up */
+      transition: opacity 0.25s ease;
+      opacity: 0;
+      pointer-events: none;
+    }
+    #ray-panel.ray-panel--active {
+      max-height: 100vh !important;
+      overflow-y: auto;
+      border-left: 2px solid var(--color-accent-gold) !important;
+      border-top: none !important;
+      opacity: 1;
+      pointer-events: auto;
+    }
+    /* Hand tray stops at the left edge of Ray's column */
+    #hand-tray {
+      right: 320px !important;
+    }
+    /* Game content no longer needs Ray-panel bottom padding */
+    .game-screen-padded {
+      padding-bottom: ${HAND_TRAY_HEIGHT + 16}px !important;
+    }
   }
 `;
 document.head.appendChild(styleEl);
