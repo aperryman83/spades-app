@@ -124,10 +124,17 @@ function trickPauseMs() {
  * This wrapper adds the aliases so Ray gets the right context.
  */
 function getStateForRay() {
+  // Set verbosity based on mode so Ray fires at the right frequency:
+  // BEGINNER: 3 — fires after tricks, at bidding, and all HIGH moments
+  // MEDIUM:   2 — fires at bidding and HIGH moments
+  // ADVANCED: 1 — HIGH moments only (nil fail, getting set, bag penalty)
+  const verbosity = gameState?.mode === PLAYER_MODE.BEGINNER ? 3 :
+                    gameState?.mode === PLAYER_MODE.MEDIUM   ? 2 : 1;
   return {
     ...gameState,
     phase: gameState.status,
     current_trick: gameState.current_trick_plays,
+    settings: { ...(gameState.settings || {}), verbosity },
   };
 }
 /**

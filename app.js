@@ -38,6 +38,8 @@ import { MODE_LABELS } from './utils/helpers.js';
 const root = document.getElementById('app-root');
 let gameContentEl = null;
 let rayPanelEl = null;
+let rayPanelVisible = false;   // X hides panel but keeps conversation alive
+let lastShownConvoId = null;   // auto-shows panel when a new Ray message fires
 
 /**
  * Called once at boot. Splits #app-root into:
@@ -61,8 +63,21 @@ function updateRayPanel() {
   const convo = getActiveConversation();
 
   if (!convo || !convo.isActive) {
+    rayPanelVisible = false;
     rayPanelEl.classList.remove('ray-panel--active');
     rayPanelEl.innerHTML = '';
+    return;
+  }
+
+  // Auto-show panel whenever Ray fires a new teaching moment
+  if (convo.id !== lastShownConvoId) {
+    rayPanelVisible = true;
+    lastShownConvoId = convo.id;
+  }
+
+  // If the player hit X (minimized), stay hidden until they ask
+  if (!rayPanelVisible) {
+    rayPanelEl.classList.remove('ray-panel--active');
     return;
   }
 
@@ -96,9 +111,10 @@ function updateRayPanel() {
   const msgs = document.getElementById('ray-messages');
   if (msgs) msgs.scrollTop = msgs.scrollHeight;
 
-  // Wire dismiss
+  // Wire dismiss — hides the panel but keeps the conversation alive.
+  // Player can reopen with "Talk to Ray" and pick up where they left off.
   document.getElementById('ray-dismiss')?.addEventListener('click', () => {
-    dismissConversation();
+    rayPanelVisible = false;
     updateRayPanel();
   });
 
@@ -275,9 +291,15 @@ function renderBiddingScreen(state) {
       });
     }
   }
-  // Wire Talk to Ray button
+  // Wire Talk to Ray button — shows existing chat if Ray already said something,
+  // or starts a fresh conversation if the slate is clean.
   document.getElementById('btn-ask-ray')?.addEventListener('click', async () => {
-    await askRay();
+    rayPanelVisible = true;
+    if (isConversationActive()) {
+      updateRayPanel();
+    } else {
+      await askRay();
+    }
   });
 }
 // ═════════════════════════════════════════════════════════════════════════════
@@ -335,9 +357,15 @@ function renderPlayingScreen(state) {
       });
     });
   }
-  // Wire Talk to Ray button
+  // Wire Talk to Ray button — shows existing chat if Ray already said something,
+  // or starts a fresh conversation if the slate is clean.
   document.getElementById('btn-ask-ray')?.addEventListener('click', async () => {
-    await askRay();
+    rayPanelVisible = true;
+    if (isConversationActive()) {
+      updateRayPanel();
+    } else {
+      await askRay();
+    }
   });
 }
 // ═════════════════════════════════════════════════════════════════════════════
@@ -415,7 +443,12 @@ function renderRoundEndScreen(state) {
   document.getElementById('btn-next-round')?.addEventListener('click', () => handleNextRound());
   document.getElementById('btn-quit')?.addEventListener('click', renderSplash);
   document.getElementById('btn-ask-ray-round')?.addEventListener('click', async () => {
-    await askRay();
+    rayPanelVisible = true;
+    if (isConversationActive()) {
+      updateRayPanel();
+    } else {
+      await askRay();
+    }
   });
 }
 // ═════════════════════════════════════════════════════════════════════════════
@@ -517,7 +550,7 @@ styleEl.textContent = `
     flex-direction: column;
   }
   #ray-panel.ray-panel--active {
-    flex-basis: 42vh;
+    flex-basis: 30vh;
   }
   .ray-chat-header {
     display: flex;
