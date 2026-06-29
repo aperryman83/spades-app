@@ -53,8 +53,12 @@ let rayPanelVisible  = false;  // X hides panel but keeps conversation alive
 let lastShownConvoId = null;   // auto-shows panel when a new Ray message fires
 
 // Stored so card-click handlers can reference the live hand after render
-let _currentHand      = [];
+let _currentHand       = [];
 let _currentLegalCards = [];
+
+let askRayMode         = false;   // when on, card tap → ask Ray instead of play
+let _flashWinningSeat  = null;    // seat label that flashes after winning a trick
+let _prevTricksWon     = {};      // previous tricks_won snapshot for delta detection
 
 // ═════════════════════════════════════════════════════════════════════════════
 // LAYOUT INIT — three persistent fixed zones
@@ -106,13 +110,26 @@ function updateHandTray(hand, legalCards = [], isMyTurn = false, label = 'Your H
     : 'var(--color-text-muted)';
   const labelWeight = isMyTurn ? '600' : '400';
 
+const askRayBtn = isMyTurn ? `
+    <button class="ask-ray-toggle ${askRayMode ? 'ask-ray-toggle--active' : ''}" id="ask-ray-toggle" title="Toggle Ask Ray mode">
+      🤔${askRayMode ? ' On' : ''}
+    </button>` : '';
+
   handTrayEl.innerHTML = `
-    <div class="hand-tray__label" style="color:${labelColor}; font-weight:${labelWeight};">
-      ${label}
+    <div class="hand-tray__label" style="color:${labelColor}; font-weight:${labelWeight}; display:flex; align-items:center; gap:8px; justify-content:center;">
+      <span>${label}</span>${askRayBtn}
     </div>
     <div class="hand-row" id="hand-row-cards">${handHTML}</div>
   `;
   handTrayEl.classList.add('hand-tray--visible');
+
+  // Ask Ray toggle
+  document.getElementById('ask-ray-toggle')?.addEventListener('click', e => {
+    e.stopPropagation();
+    askRayMode = !askRayMode;
+    updateHandTray(_currentHand, _currentLegalCards, true,
+      askRayMode ? '🤔 Ask Ray mode — tap a card to consult' : 'Your turn — tap a card');
+  });
 
   // Wire card clicks
   if (isMyTurn) {
@@ -121,7 +138,20 @@ function updateHandTray(hand, legalCards = [], isMyTurn = false, label = 'Your H
       el.addEventListener('click', () => {
         const cardId = el.dataset.cardId;
         const card = _currentHand.find(c => c.id === cardId);
-        if (card) handleHumanPlay(card);
+        if (!card) return;
+        if (askRayMode) {
+          const cardName = cardLabel(card);
+          const msg = `I'm thinking of playing the ${cardName} — is that a good idea? What should I be considering?`;
+          rayPanelVisible = true;
+          if (rayPanelEl) rayPanelEl.classList.add('ray-panel--active');
+          (async () => {
+            if (!isConversationActive()) await askRay();
+            await sendPlayerMessage(msg, getState());
+            updateRayPanel();
+          })();
+        } else {
+          handleHumanPlay(card);
+        }
       });
     });
   }
@@ -280,6 +310,19 @@ function renderModeSelect() {
 // ═════════════════════════════════════════════════════════════════════════════
 function renderGame(state) {
   if (!state) return;
+
+  // Detect who just won a trick — set flash seat
+  if (state.tricks_won && Object.keys(_prevTricksWon).length > 0) {
+    for (const seat of PLAYER_SEATS) {
+      if ((state.tricks_won[seat] || 0) > (_prevTricksWon[seat] || 0)) {
+        _flashWinningSeat = seat;
+        setTimeout(() => { _flashWinningSeat = null; }, 2000);
+        break;
+      }
+    }
+  }
+  if (state.tricks_won) _prevTricksWon = { ...state.tricks_won };
+
   switch (state.status) {
     case GAME_PHASE.BIDDING:   renderBiddingScreen(state);  break;
     case GAME_PHASE.PLAYING:   renderPlayingScreen(state);  break;
@@ -363,7 +406,7 @@ function renderPlayingScreen(state) {
 
   // Hand goes into the fixed tray
   const turnLabel = isMyTurn
-    ? 'Your turn — tap a card'
+    ? (askRayMode ? '🤔 Ask Ray mode — tap a card to consult' : 'Your turn — tap a card')
     : `Waiting for ${state.current_turn}...`;
   updateHandTray(hand, legalCards, isMyTurn, turnLabel);
 
@@ -372,7 +415,8 @@ function renderPlayingScreen(state) {
     const label  = seat === HUMAN_SEAT ? 'You' : seat.charAt(0).toUpperCase();
     const bid    = state.bids[seat] === 0 ? 'NIL' : state.bids[seat];
     const tricks = state.tricks_won[seat];
-    return `<span style="margin: 0 6px;">${label}: ${bid}(${tricks})</span>`;
+    const flash  = seat === _flashWinningSeat ? ' bid-seat--flash' : '';
+    return `<span class="bid-seat${flash}" style="margin: 0 6px;">${label}: ${bid}(${tricks})</span>`;
   }).join('');
 
   gameContentEl.innerHTML = `
@@ -699,6 +743,36 @@ styleEl.textContent = `
   }
   .ray-chat-input:focus { border-color: var(--color-accent-gold); }
 
+/* ── Ask Ray toggle ──────────────────────────────────────────────────────── */
+  .ask-ray-toggle {
+    background: none;
+    border: 1px solid var(--color-accent-gold);
+    color: var(--color-accent-gold-lt);
+    font-size: 0.72rem;
+    padding: 3px 9px;
+    border-radius: 12px;
+    cursor: pointer;
+    opacity: 0.7;
+    transition: all 0.15s;
+    white-space: nowrap;
+  }
+  .ask-ray-toggle:hover { opacity: 1; background: rgba(200, 148, 26, 0.15); }
+  .ask-ray-toggle--active {
+    background: rgba(200, 148, 26, 0.25);
+    opacity: 1;
+    border-color: var(--color-accent-gold-lt);
+  }
+
+  /* ── Trick winner flash ──────────────────────────────────────────────────── */
+  @keyframes trickWinFlash {
+    0%   { color: var(--color-text-secondary); font-weight: 400; }
+    15%  { color: var(--color-accent-gold-lt); font-weight: 700; }
+    85%  { color: var(--color-accent-gold-lt); font-weight: 700; }
+    100% { color: var(--color-text-secondary); font-weight: 400; }
+  }
+  .bid-seat--flash {
+    animation: trickWinFlash 1.8s ease forwards;
+  }
   /* ── Talk to Ray button ──────────────────────────────────────────────────── */
   .btn--ray {
     background: rgba(200, 148, 26, 0.15);
