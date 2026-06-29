@@ -77,8 +77,8 @@ function initLayout() {
  * Renders the player's hand into the fixed #hand-tray element.
  * Pass null to hide the tray (splash / mode-select / round-end screens).
  *
- * @param {Array|null} hand        — sorted card array, or null to hide
- * @param {Array}      legalCards � cards the player can legally play right now
+ * @param {Array|null} hand       — sorted card array, or null to hide
+ * @param {Array}      legalCards — cards the player can legally play right now
  * @param {boolean}    isMyTurn   — whether it's currently the human's turn
  * @param {string}     label      — status label above the cards
  */
@@ -150,11 +150,16 @@ function updateRayPanel() {
   // Build messages HTML (or placeholder if no conversation yet)
   let messagesHTML = '';
   if (convo && convo.isActive) {
-    messagesHTML = convo.messages.map(m => `
-      <div class="ray-chat-msg ray-chat-msg--${m.role === 'assistant' ? 'ray' : 'player'}">
-        ${m.content.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\n\n/g, '</p><p>').replace(/\n/g, '<br>')}
-      </div>
-    `).join('');
+    messagesHTML = convo.messages.map(m => {
+      const formatted = m.content
+        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+        .split(/\n\n+/)
+        .map(para => para.trim())
+        .filter(para => para.length > 0)
+        .map(para => `<p>${para.replace(/\n/g, '<br>')}</p>`)
+        .join('');
+      return `<div class="ray-chat-msg ray-chat-msg--${m.role === 'assistant' ? 'ray' : 'player'}">${formatted}</div>`;
+    }).join('');
   } else if (isDesktop) {
     messagesHTML = `<div class="ray-placeholder">Ask me anything — your hand, what to bid, why something happened.</div>`;
   } else {
@@ -844,10 +849,20 @@ styleEl.textContent = `
       opacity: 1 !important;
       pointer-events: auto !important;
     }
-    /* Game content fills the column left of the sidebar */
+    /* Game content fills the column left of the sidebar, centered */
     #game-content {
       width: calc(100vw - 320px) !important;
       max-width: none !important;
+      height: 100vh !important;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    /* Cap the game table width so it doesn't stretch on wide screens */
+    #game-content .screen {
+      width: 100%;
+      max-width: 700px;
     }
     /* Override any max-width on #app-root set by style.css */
     #app-root {
