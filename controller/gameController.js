@@ -5,6 +5,7 @@
  * This is the ONLY file that talks to every layer:
  *   - Engine (game logic)
  *   - Bots (AI decisions)
+ *   - Coach (Uncle Ray)
  *   - UI (rendering)
  *
  * It does NOT implement any logic itself — it just tells
@@ -14,17 +15,22 @@
  * - Orchestration ONLY — no game rules, no rendering code
  * - Calls engine functions for all state changes
  * - Calls bots for AI turns
+ * - Calls coach for teaching moments
  * - Calls render() after every state change
  */
-
 import {
   GAME_PHASE,
   HUMAN_SEAT,
   PLAYER_SEATS,
+  PLAYER_MODE,
+  SEAT_PARTNER,
   BOT_DELAY_MIN_MS,
   BOT_DELAY_MAX_MS,
+  BOT_DELAY_MEDIUM_MIN_MS,
+  BOT_DELAY_MEDIUM_MAX_MS,
+  BOT_DELAY_BEGINNER_MIN_MS,
+  BOT_DELAY_BEGINNER_MAX_MS,
 } from '../engine/constants.js';
-
 import {
   createInitialGameState,
   dealHands,
@@ -36,7 +42,6 @@ import {
   startNewRound,
   setStatus,
 } from '../engine/gameState.js';
-
 import { isValidBid } from '../engine/bidding.js';
 import { getLegalCards, isLegalPlay } from '../engine/legalMoves.js';
 import { resolveTrick } from '../engine/trickResolver.js';
@@ -48,54 +53,94 @@ import {
   isRoundComplete,
   getBiddingOrder,
 } from '../engine/turnManager.js';
-
 import { getBotBid, getBotPlay } from '../bots/botBase.js';
 import rookieBot from '../bots/rookieBot.js';
-
 import { validateRuleModule } from '../engine/rules/ruleInterface.js';
 import standardSpades from '../engine/rules/standardSpades.js';
-
 import logger from '../utils/logger.js';
 import { delay, randomInt } from '../utils/helpers.js';
-
+// ── Coach (Uncle Ray) ─────────────────────────────────────────────────────────
+import {
+  checkForTeachingMoment,
+  resetConversationState,
+  startPlayerInitiatedConversation,
+} from '../coach/coachState.js';
+import { TRIGGER } from '../coach/triggers.js';
 // ═════════════════════════════════════════════════════════════════════════════
 // GAME STATE — held in closure, accessed by all controller functions
 // ═════════════════════════════════════════════════════════════════════════════
-
 let gameState = null;
 let renderFn = null;        // set by init — the UI render function
 let botInProgress = false;  // prevents double-firing bot turns
-
 // ═════════════════════════════════════════════════════════════════════════════
 // HELPERS
 // ═════════════════════════════════════════════════════════════════════════════
-
 function isHumanTurn() {
   return gameState.current_turn === HUMAN_SEAT;
 }
-
 function isBotSeat(seat) {
   return seat !== HUMAN_SEAT;
 }
-
 function getBotForSeat(seat) {
   // MVP: all bots use rookieBot
   return rookieBot;
 }
-
 function render() {
   if (renderFn) renderFn(gameState);
 }
-
+/**
+ * Mode-aware bot delay.
+ * Beginners get slower bots so there's time to read Ray's coaching.
+ */
 async function botDelay() {
-  const ms = randomInt(BOT_DELAY_MIN_MS, BOT_DELAY_MAX_MS);
-  await delay(ms);
+  const mode = gameState?.mode;
+  let min, max;
+  if (mode === PLAYER_MODE.BEGINNER) {
+    min = BOT_DELAY_BEGINNER_MIN_MS;
+    max = BOT_DELAY_BEGINNER_MAX_MS;
+  } else if (mode === PLAYER_MODE.MEDIUM) {
+    min = BOT_DELAY_MEDIUM_MIN_MS;
+    max = BOT_DELAY_MEDIUM_MAX_MS;
+  } else {
+    min = BOT_DELAY_MIN_MS;
+    max = BOT_DELAY_MAX_MS;
+  }
+  await delay(randomInt(min, max));
 }
-
+/**
+ * Mode-aware trick pause (after all 4 cards are played, before resolving).
+ * Gives the player time to see the completed trick before it clears.
+ */
+function trickPauseMs() {
+  const mode = gameState?.mode;
+  if (mode === PLAYER_MODE.BEGINNER) return 2000;
+  if (mode === PLAYER_MODE.MEDIUM)   return 1400;
+  return 900;
+}
+/**
+ * Adapts game state for Uncle Ray.
+ * coachState.js reads `state.phase` and `state.current_trick` — names that
+ * differ from our internal `state.status` and `state.current_trick_plays`.
+ * This wrapper adds the aliases so Ray gets the right context.
+ */
+function getStateForRay() {
+  return {
+    ...gameState,
+    phase: gameState.status,
+    current_trick: gameState.current_trick_plays,
+  };
+}
+/**
+ * Fires a teaching moment trigger and re-renders if Ray speaks up.
+ * Uses await so HIGH-priority moments pause the game flow.
+ */
+async function fireCoachTrigger(triggerType, triggerData = {}) {
+  const convo = await checkForTeachingMoment(getStateForRay(), triggerType, triggerData);
+  if (convo) render();
+}
 // ═════════════════════════════════════════════════════════════════════════════
 // INITIALIZE GAME
 // ═════════════════════════════════════════════════════════════════════════════
-
 /**
  * Starts a new game. Called when the player selects a mode.
  *
@@ -105,31 +150,32 @@ async function botDelay() {
 export function initGame(mode, renderCallback) {
   renderFn = renderCallback;
   botInProgress = false;
-
+  resetConversationState();
   // MVP: always use standard spades
   const activeRules = standardSpades;
-
   gameState = createInitialGameState(mode, activeRules);
   gameState = dealHands(gameState);
-
   render();
-
   // Start the bidding phase — kick off bot bids if a bot goes first
   startBiddingPhase();
 }
-
 // ═════════════════════════════════════════════════════════════════════════════
 // BIDDING PHASE
 // ═════════════════════════════════════════════════════════════════════════════
-
 async function startBiddingPhase() {
   gameState = setStatus(gameState, GAME_PHASE.BIDDING);
   render();
-
   // Process bot bids until it's the human's turn or bidding is complete
   await processBotBids();
+  // If it's now the human's turn to bid, Ray gives bidding advice
+  if (
+    gameState.status === GAME_PHASE.BIDDING &&
+    !isBiddingComplete(gameState) &&
+    gameState.current_turn === HUMAN_SEAT
+  ) {
+    await fireCoachTrigger(TRIGGER.BIDDING_START);
+  }
 }
-
 async function processBotBids() {
   while (
     gameState.status === GAME_PHASE.BIDDING &&
@@ -138,22 +184,18 @@ async function processBotBids() {
   ) {
     const seat = gameState.current_turn;
     const bot = getBotForSeat(seat);
-
     await botDelay();
-
     const bid = getBotBid(bot, gameState, seat);
     gameState = recordBid(gameState, seat, bid);
     gameState = advanceTurn(gameState);
     render();
   }
-
   // Check if bidding is now complete (all 4 bids in)
   if (isBiddingComplete(gameState)) {
     startPlayingPhase();
   }
   // Otherwise it's the human's turn to bid — UI will call handleHumanBid
 }
-
 /**
  * Called by the UI when the human player submits a bid.
  *
@@ -162,16 +204,13 @@ async function processBotBids() {
 export async function handleHumanBid(bid) {
   if (gameState.status !== GAME_PHASE.BIDDING) return;
   if (gameState.current_turn !== HUMAN_SEAT) return;
-
   // Validate the bid
   const hand = gameState.hands[HUMAN_SEAT];
   if (!isValidBid(bid, hand, gameState)) return;
-
   // Record it
   gameState = recordBid(gameState, HUMAN_SEAT, bid);
   gameState = advanceTurn(gameState);
   render();
-
   // Continue with any remaining bot bids
   if (!isBiddingComplete(gameState)) {
     await processBotBids();
@@ -179,25 +218,20 @@ export async function handleHumanBid(bid) {
     startPlayingPhase();
   }
 }
-
 // ═════════════════════════════════════════════════════════════════════════════
 // PLAYING PHASE
 // ═════════════════════════════════════════════════════════════════════════════
-
 function startPlayingPhase() {
   gameState = setStatus(gameState, GAME_PHASE.PLAYING);
   render();
-
   // If a bot leads the first trick, kick off bot play
   if (isBotSeat(gameState.current_turn)) {
     processBotPlays();
   }
 }
-
 async function processBotPlays() {
   if (botInProgress) return;
   botInProgress = true;
-
   try {
     while (
       gameState.status === GAME_PHASE.PLAYING &&
@@ -205,9 +239,7 @@ async function processBotPlays() {
     ) {
       const seat = gameState.current_turn;
       const bot = getBotForSeat(seat);
-
       await botDelay();
-
       const card = getBotPlay(bot, gameState, seat);
       await executeCardPlay(seat, card);
     }
@@ -215,7 +247,6 @@ async function processBotPlays() {
     botInProgress = false;
   }
 }
-
 /**
  * Called by the UI when the human player taps a card.
  *
@@ -224,17 +255,13 @@ async function processBotPlays() {
 export async function handleHumanPlay(card) {
   if (gameState.status !== GAME_PHASE.PLAYING) return;
   if (gameState.current_turn !== HUMAN_SEAT) return;
-
   const hand = gameState.hands[HUMAN_SEAT];
   const trickPlays = gameState.current_trick_plays;
   const isLeading = trickPlays.length === 0;
   const ledSuit = isLeading ? null : trickPlays[0].card.suit;
-
   // Check if this card is legal
   if (!isLegalPlay(card, hand, ledSuit, isLeading, gameState)) return;
-
   await executeCardPlay(HUMAN_SEAT, card);
-
   // Continue with bot plays if it's their turn
   if (
     gameState.status === GAME_PHASE.PLAYING &&
@@ -243,18 +270,14 @@ export async function handleHumanPlay(card) {
     await processBotPlays();
   }
 }
-
 // ═════════════════════════════════════════════════════════════════════════════
 // EXECUTE A CARD PLAY (shared by human and bot)
 // ═════════════════════════════════════════════════════════════════════════════
-
 async function executeCardPlay(seat, card) {
   // 1. Record the play on the Scoreboard
   gameState = applyCardPlay(gameState, seat, card);
-
   logger.info('card_played', { seat, card: card.id });
   render();
-
   // 2. Check if the trick is complete (4 cards played)
   if (isTrickComplete(gameState)) {
     await resolveTrickAndContinue();
@@ -264,47 +287,43 @@ async function executeCardPlay(seat, card) {
     render();
   }
 }
-
 async function resolveTrickAndContinue() {
   const plays = gameState.current_trick_plays;
   const ledSuit = plays[0].card.suit;
-
-  // Small pause so player can see the completed trick
-  await delay(800);
-
+  // Pause so player can see the completed trick
+  await delay(trickPauseMs());
   // 3. Resolve who won
   const trickResult = resolveTrick(plays, ledSuit, gameState);
-
   // 4. Update the Scoreboard with trick result
   gameState = applyTrickResult(gameState, trickResult);
   render();
-
-  // 5. Check if the round is over (13 tricks played)
+  // 5. Fire TRICK_COMPLETE teaching moment
+  // winner is now gameState.current_turn (they lead next trick)
+  const winner = gameState.current_turn;
+  const isTeamWin = winner === HUMAN_SEAT || winner === SEAT_PARTNER[HUMAN_SEAT];
+  await fireCoachTrigger(TRIGGER.TRICK_COMPLETE, { isTeamWin });
+  // 6. Check if the round is over (13 tricks played)
   if (isRoundComplete(gameState)) {
     await endRound();
   } else {
     // Next trick — winner leads
-    // If a bot won, they need to play
     if (isBotSeat(gameState.current_turn)) {
       await processBotPlays();
     }
   }
 }
-
 // ═════════════════════════════════════════════════════════════════════════════
 // ROUND END
 // ═════════════════════════════════════════════════════════════════════════════
-
 async function endRound() {
   // Finalize nil outcomes (active → made)
   gameState = finalizeNilResults(gameState);
-
   // Calculate scores
   const deltas = scoreRound(gameState);
   gameState = applyRoundScore(gameState, deltas);
-
   render();
-
+  // Fire ROUND_COMPLETE teaching moment
+  await fireCoachTrigger(TRIGGER.ROUND_COMPLETE);
   // Check if game is over
   const endCheck = checkGameEnd(gameState);
   if (endCheck.over) {
@@ -319,35 +338,41 @@ async function endRound() {
     render();
     return;
   }
-
   // Game continues — show round end screen
   // UI will call handleNextRound() when player is ready
 }
-
 /**
  * Called by the UI when the player clicks "Next Round".
  */
 export async function handleNextRound() {
   if (gameState.status !== GAME_PHASE.ROUND_END) return;
-
   gameState = startNewRound(gameState);
   gameState = dealHands(gameState);
   render();
-
   await startBiddingPhase();
 }
-
+// ═════════════════════════════════════════════════════════════════════════════
+// COACH — Public interface for "Talk to Ray" button
+// ═════════════════════════════════════════════════════════════════════════════
+/**
+ * Player-initiated conversation with Ray.
+ * Called when the player clicks "Talk to Ray".
+ * Ray figures out the most relevant thing to discuss based on the current
+ * game situation.
+ */
+export async function askRay() {
+  await startPlayerInitiatedConversation(getStateForRay());
+  render();
+}
 // ═════════════════════════════════════════════════════════════════════════════
 // PUBLIC GETTERS (for UI to read state)
 // ═════════════════════════════════════════════════════════════════════════════
-
 /**
  * Returns the current game state. UI uses this to know what to render.
  */
 export function getState() {
   return gameState;
 }
-
 /**
  * Returns the legal cards the human can play right now.
  * Used by the UI to highlight playable cards.
@@ -355,11 +380,9 @@ export function getState() {
 export function getHumanLegalCards() {
   if (!gameState || gameState.status !== GAME_PHASE.PLAYING) return [];
   if (gameState.current_turn !== HUMAN_SEAT) return [];
-
   const hand = gameState.hands[HUMAN_SEAT];
   const trickPlays = gameState.current_trick_plays;
   const isLeading = trickPlays.length === 0;
   const ledSuit = isLeading ? null : trickPlays[0].card.suit;
-
   return getLegalCards(hand, ledSuit, isLeading, gameState);
 }
