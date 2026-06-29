@@ -211,6 +211,9 @@ function buildGameContext(context) {
   if (context.tricksNeeded !== undefined) {
     ctx += `Tricks still needed to make bid: ${context.tricksNeeded}\n`;
   }
+  if (context.trickStatus) {
+    ctx += `TRICK STATUS (critical — read before advising on what to play): ${context.trickStatus}\n`;
+  }
   if (context.currentTrick) {
     ctx += `Current trick on the table: ${context.currentTrick}\n`;
   }
