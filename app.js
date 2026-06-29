@@ -550,15 +550,24 @@ const styleEl = document.createElement('style');
 styleEl.textContent = `
   /* ── Three-zone fixed layout ────────────────────────────────────────────── */
 
-  /* Game content scrolls normally; bottom padding reserves space for hand tray */
+  /* Game content: capped height, scrollable so bid buttons stay reachable */
   #game-content {
     width: 100%;
-    padding-bottom: ${HAND_TRAY_HEIGHT}px;
+    height: calc(100vh - ${HAND_TRAY_HEIGHT}px);
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
   }
 
-  /* Screens that show during play need the padding so content isn't hidden */
+  /* Screens inside game-content need to be at least as tall as the container */
+  #game-content .screen {
+    min-height: calc(100vh - ${HAND_TRAY_HEIGHT}px);
+    height: auto;
+  }
+
+  /* Extra bottom padding so bid buttons clear the Ray panel when it's open */
   .game-screen-padded {
-    padding-bottom: ${HAND_TRAY_HEIGHT + 8}px !important;
+    padding-bottom: calc(32vh + 24px) !important;
+    box-sizing: border-box;
   }
 
   /* ── Hand Tray — pinned to absolute bottom, always on top ───────────────── */
@@ -595,15 +604,18 @@ styleEl.textContent = `
     max-height: 0;
     overflow: hidden;
     background: var(--color-bg-deep);
-    border-top: 2px solid var(--color-accent-gold);
-    border-bottom: 1px solid rgba(200, 148, 26, 0.25);
+    /* border only appears when panel is open — avoids ghost line on splash */
+    border-top: none;
+    border-bottom: none;
     z-index: 50;
     display: flex;
     flex-direction: column;
     transition: max-height 0.3s ease;
   }
   #ray-panel.ray-panel--active {
-    max-height: 38vh;
+    max-height: 30vh;
+    border-top: 2px solid var(--color-accent-gold);
+    border-bottom: 1px solid rgba(200, 148, 26, 0.25);
   }
 
   /* ── Ray chat internals ──────────────────────────────────────────────────── */
