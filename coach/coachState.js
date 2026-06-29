@@ -166,16 +166,36 @@ function buildGameContext(state, triggerType, triggerData) {
                     (state.bids?.[SEAT_PARTNER[HUMAN_SEAT]] || 0);
     context.tricksNeeded = Math.max(0, teamBid - humanTeam);
   }
-  // Current trick
-  if (state.current_trick && state.current_trick.length > 0) {
-    context.currentTrick = state.current_trick
-      .map(play => {
-        const label = play.seat === HUMAN_SEAT ? 'You' :
-                      play.seat === SEAT_PARTNER[HUMAN_SEAT] ? 'Partner' :
-                      `Opponent`;
-        return `${label}: ${RANK_DISPLAY[play.card.rank]}${SUIT_SYMBOL[play.card.suit]}`;
-      })
-      .join(', ');
+  // Current trick — with explicit leading/following status so Ray never
+  // tells the player to "lead" when someone has already played a card
+  if (state.phase === GAME_PHASE.PLAYING) {
+    const trickPlays = state.current_trick || [];
+    if (trickPlays.length === 0) {
+      context.trickStatus = 'You are LEADING this trick — no cards have been played yet. You play first.';
+    } else {
+      const firstPlay = trickPlays[0];
+      const ledSuit = firstPlay?.card?.suit;
+      const ledBy = firstPlay?.seat === HUMAN_SEAT ? 'you' :
+                    firstPlay?.seat === SEAT_PARTNER[HUMAN_SEAT] ? 'your partner' : 'an opponent';
+      const cardsDown = trickPlays
+        .map(p => {
+          const who = p.seat === HUMAN_SEAT ? 'You' :
+                      p.seat === SEAT_PARTNER[HUMAN_SEAT] ? 'Partner' : 'Opponent';
+          return `${who}: ${RANK_DISPLAY[p.card.rank]}${SUIT_SYMBOL[p.card.suit]}`;
+        })
+        .join(', ');
+      context.trickStatus = `This trick is already in progress — ${ledBy} led ${ledSuit}. Cards played so far: ${cardsDown}. You are FOLLOWING, not leading. You must play a ${ledSuit} if you have one.`;
+    }
+    if (trickPlays.length > 0) {
+      context.currentTrick = trickPlays
+        .map(play => {
+          const label = play.seat === HUMAN_SEAT ? 'You' :
+                        play.seat === SEAT_PARTNER[HUMAN_SEAT] ? 'Partner' :
+                        `Opponent`;
+          return `${label}: ${RANK_DISPLAY[play.card.rank]}${SUIT_SYMBOL[play.card.suit]}`;
+        })
+        .join(', ');
+    }
   }
   // Bags
   if (state.scores?.north_south?.bags !== undefined) {
@@ -440,12 +460,19 @@ export async function sendPlayerMessage(playerMessage, state = null) {
     role: 'user',
     content: playerMessage,
   });
-  // If fresh state provided, update context in system prompt
+  // If fresh state provided, update context in system prompt.
+  // Always use the current phase to pick the topic — not the original trigger —
+  // so Ray never talks about bidding when the trick is already in progress.
   let systemPrompt = activeConversation.systemPrompt;
   if (state) {
     const context = buildGameContext(state);
+    const currentTrigger =
+      state.phase === GAME_PHASE.PLAYING  ? TRIGGER.HUMAN_TURN     :
+      state.phase === GAME_PHASE.BIDDING  ? TRIGGER.BIDDING_START   :
+      state.phase === GAME_PHASE.ROUND_END ? TRIGGER.ROUND_COMPLETE :
+      activeConversation.triggerType;
     systemPrompt = buildTeachingPrompt(
-      getTeachingTopic(activeConversation.triggerType, {}),
+      getTeachingTopic(currentTrigger, {}),
       context
     );
     activeConversation.systemPrompt = systemPrompt;
