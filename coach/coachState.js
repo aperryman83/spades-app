@@ -217,7 +217,7 @@ function getTeachingTopic(triggerType, triggerData) {
       return `WALK THE PLAYER THROUGH COUNTING THEIR HAND. Do NOT open with a question like "what do you see?" — the player is a beginner and doesn't know what to look for yet. YOU go first. YOU do the analysis. Follow this structure:
 
 1. Tell them their spade count and quality. Spades are trump — each one is a candidate for a trick. High spades (A, K, Q, J) are stronger than low ones (2-8).
-2. Point out aces across all suits — aces are GUARANTEED tricks, call them "sure things."
+2. Point out aces across all suits — aces are your strongest non-spade tricks, but warn that they can be cut if someone is void in that suit. Spade aces are the safest since spades are trump.
 3. Mention any kings with backup (another card of the same suit) — those are "likely" tricks.
 4. Give them a specific bid recommendation based on what you see in their hand.
 5. THEN close with ONE short question to confirm they're following — not asking them to do the analysis themselves.
