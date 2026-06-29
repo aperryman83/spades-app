@@ -527,30 +527,30 @@ function renderCardContent(card) {
 const styleEl = document.createElement('style');
 styleEl.textContent = `
   /* ── Layout ── */
-  #app-root {
-    display: flex;
-    flex-direction: column;
-    height: 100vh;
-    overflow: hidden;
-  }
+  /* #game-content fills the full screen as normal — Ray panel floats on top */
   #game-content {
-    flex: 1;
-    overflow: hidden;
-    min-height: 0;
+    width: 100%;
   }
 
-  /* ── Ray Panel (persistent chat drawer) ── */
+  /* ── Ray Panel (fixed overlay, floats ABOVE the hand) ── */
+  /* Positioned from the bottom so it never covers the hand row */
   #ray-panel {
-    flex: 0 0 0;
+    position: fixed;
+    bottom: 220px;
+    left: 0;
+    right: 0;
+    max-height: 0;
     overflow: hidden;
     background: var(--color-bg-deep);
     border-top: 2px solid var(--color-accent-gold);
-    transition: flex-basis 0.3s ease;
+    border-bottom: 1px solid rgba(200, 148, 26, 0.25);
+    z-index: 50;
     display: flex;
     flex-direction: column;
+    transition: max-height 0.3s ease;
   }
   #ray-panel.ray-panel--active {
-    flex-basis: 30vh;
+    max-height: 38vh;
   }
   .ray-chat-header {
     display: flex;
