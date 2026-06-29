@@ -80,7 +80,7 @@ function shouldAutoTeach(triggerType, state) {
 // ═════════════════════════════════════════════════════════════════════════════
 function buildGameContext(state, triggerType, triggerData) {
   const context = {};
-  context.phase = state.phase;
+  context.phase = state.status;
   const humanHand = state.hands?.[HUMAN_SEAT];
   if (humanHand && humanHand.length > 0) {
     context.hand = humanHand
@@ -121,8 +121,8 @@ function buildGameContext(state, triggerType, triggerData) {
                     (state.bids?.[SEAT_PARTNER[HUMAN_SEAT]] || 0);
     context.tricksNeeded = Math.max(0, teamBid - humanTeam);
   }
-  if (state.phase === GAME_PHASE.PLAYING) {
-    const trickPlays = state.current_trick || [];
+  if (state.status === GAME_PHASE.PLAYING) {
+    const trickPlays = state.current_trick_plays || [];
     if (trickPlays.length === 0) {
       context.trickStatus = 'You are LEADING this trick — no cards have been played yet. You play first.';
     } else {
@@ -160,7 +160,7 @@ function buildGameContext(state, triggerType, triggerData) {
   const partnerNil = state.nil_status?.[SEAT_PARTNER[HUMAN_SEAT]];
   if (humanNil) context.nilStatus = `You bid nil (status: ${humanNil})`;
   if (partnerNil) context.nilStatus = `Partner bid nil (status: ${partnerNil})`;
-  if (state.phase === GAME_PHASE.BIDDING) {
+  if (state.status === GAME_PHASE.BIDDING) {
     try {
       const rec = getBidRecommendation(state);
       if (rec) {
@@ -171,7 +171,7 @@ function buildGameContext(state, triggerType, triggerData) {
       }
     } catch (e) {}
   }
-  if (state.phase === GAME_PHASE.PLAYING && state.current_turn === HUMAN_SEAT) {
+  if (state.status === GAME_PHASE.PLAYING && state.current_turn === HUMAN_SEAT) {
     try {
       const rec = getPlayRecommendation(state);
       if (rec) {
@@ -334,9 +334,9 @@ export async function sendPlayerMessage(playerMessage, state = null) {
   if (state) {
     const context = buildGameContext(state);
     const currentTrigger =
-      state.phase === GAME_PHASE.PLAYING   ? TRIGGER.HUMAN_TURN    :
-      state.phase === GAME_PHASE.BIDDING   ? TRIGGER.BIDDING_START  :
-      state.phase === GAME_PHASE.ROUND_END ? TRIGGER.ROUND_COMPLETE :
+      state.status === GAME_PHASE.PLAYING   ? TRIGGER.HUMAN_TURN    :
+      state.status === GAME_PHASE.BIDDING   ? TRIGGER.BIDDING_START  :
+      state.status === GAME_PHASE.ROUND_END ? TRIGGER.ROUND_COMPLETE :
       activeConversation.triggerType;
     systemPrompt = buildTeachingPrompt(getTeachingTopic(currentTrigger, {}), context);
     activeConversation.systemPrompt = systemPrompt;
@@ -356,8 +356,8 @@ export async function sendPlayerMessage(playerMessage, state = null) {
 
 export async function startPlayerInitiatedConversation(state) {
   let triggerType = TRIGGER.HUMAN_TURN;
-  if (state.phase === GAME_PHASE.BIDDING) triggerType = TRIGGER.BIDDING_START;
-  if (state.phase === GAME_PHASE.ROUND_END) triggerType = TRIGGER.ROUND_COMPLETE;
+  if (state.status === GAME_PHASE.BIDDING) triggerType = TRIGGER.BIDDING_START;
+  if (state.status === GAME_PHASE.ROUND_END) triggerType = TRIGGER.ROUND_COMPLETE;
   dismissConversation();
   return await startTeachingMoment(state, triggerType, {});
 }
