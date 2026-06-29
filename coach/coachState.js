@@ -102,7 +102,7 @@ function shouldAutoTeach(triggerType, state) {
   return false;
 }
 // ═════════════════════════════════════════════════════════════════════════════
-// GAME CONTEXT BUILDER — Translates game state into plain English for Ray
+// GAME CONTEXT BUILDER — Translates game state into plain English for Rax
 // ═════════════════════════════════════════════════════════════════════════════
 /**
  * Reads the current game state and builds a plain-language context
@@ -273,31 +273,83 @@ function describeTrigger(triggerType, triggerData) {
     case TRIGGER.NIL_FAILED:
       return `${triggerData.isHuman ? 'Player\'s' : triggerData.isPartner ? 'Partner\'s' : 'Opponent\'s'} nil just failed.`;
     case TRIGGER.OVERBID_RISK:
-      return `The team's total bid of ${triggerData.totalBid} is high risk. ${triggerData.notes}.`;
+      return `We're at risk of not making our bid. Need ${triggerData.tricksNeeded} more tricks with ${triggerData.tricksLeft} remaining.`;
     case TRIGGER.BAG_WARNING:
-      return `Team has ${triggerData.bags} bags. Ten bags = -100 point penalty.`;
+      return `Bag warning: we're at ${triggerData.currentBags} bags. Penalty at 10.`;
     case TRIGGER.SPADES_BROKEN:
-      return 'Spades have been broken this round – now anyone can lead spades.';
+      return 'Spades just got broken — someone played a spade on a non-spade trick.';
     case TRIGGER.PARTNER_VOID_DETECTED:
-      return `Partner appears to be void in ${triggerData.suit}.+ or $+{triggerData.card} played.`;
+      return `Partner showed a void — they couldn't follow ${triggerData.suit} and played a different suit.`;
     case TRIGGER.OPPONENT_VOID_DETECTED:
-      return `An opponent appears to be void in ${triggerData.suit}.`;
+      return `An opponent showed a void — they couldn't follow ${triggerData.suit}.`;
     case TRIGGER.ROUND_COMPLETE:
-      return `Round complete. Final scores: Us: ${triggerData.usScore}, Them: ${triggerData.themScore}.`;
+      return 'The round just ended.';
     default:
-      return `${triggerType} event occurred.`;
+      return `Game event: ${triggerType}`;
   }
 }
 // ═════════════════════════════════════════════════════════════════════════════
-// API COMMUNICATION — Talks to the server proxy
+// TEACHING TOPIC DESCRIPTIONS — What Ray opens with
 // ═════════════════════════════════════════════════════════════════════════════
 /**
- * Sends a request to the /api/ray endpoint and returns Ray's response.
+ * Maps trigger types to teaching topic descriptions for the
+ * focused system prompt.
+ */
+function getTeachingTopic(triggerType, triggerData) {
+  switch (triggerType) {
+    case TRIGGER.BIDDING_START:
+      return `WALK THE PLAYER THROUGH COUNTING THEIR HAND. Do NOT open with a question like "what do you see?" — the player is a beginner and doesn't know what to look for yet. YOU go first. YOU do the analysis. Follow this structure:
+
+1. Tell them their spade count and quality. Spades are trump — each one is a candidate for a trick. High spades (A, K, Q, J) are stronger than low ones (2-8).
+2. Point out aces across all suits — aces are GUARANTEED tricks, call them "sure things."
+3. Mention any kings with backup (another card of the same suit) — those are "likely" tricks.
+4. Give them a specific bid recommendation based on what you see in their hand.
+5. THEN close with ONE short question to confirm they're following — not asking them to do the analysis themselves.
+
+The context includes "Hand by suit" with EXACT counts and card values — USE THOSE EXACT NUMBERS. Do not recount or estimate. If it says spades (3): J, 8, 4 — then they have exactly 3 spades: Jack, 8, and 4.
+
+Keep your opening to 3-5 sentences. You're teaching them HOW to count, not testing whether they already know.`;
+
+    case TRIGGER.ALL_BIDS_IN:
+      return 'React to the bid totals. If overbid (total > 13), explain what that means. If team bid is high, pump them up. If low, reassure.';
+    case TRIGGER.HUMAN_TURN:
+      return 'It\'s the player\'s turn. Help them think through which card to play and why. Consider whether they\'re leading or following, what the goal is (need tricks vs. made bid already), and what the current trick looks like.';
+    case TRIGGER.TRICK_COMPLETE:
+      return triggerData?.isTeamWin
+        ? 'We won the trick. Help the player understand WHY we won — was it power, timing, or reading the table?'
+        : 'We lost the trick. Help the player understand if there was a better play, or if it was unavoidable.';
+    case TRIGGER.NIL_IN_DANGER:
+      return triggerData?.isHuman
+        ? 'The player bid nil and is in danger of taking a trick. Remind them to play their absolute lowest card every time.'
+        : 'Partner bid nil and is in trouble. Teach the player to play HIGH to protect partner\'s nil.';
+    case TRIGGER.NIL_FAILED:
+      return 'A nil just failed. If it was the player or partner, address the emotional moment with warmth, then explain what happened.';
+    case TRIGGER.OVERBID_RISK:
+      return 'We\'re falling short of our bid. Help the player think about why — was the bid too high, or has the play been off?';
+    case TRIGGER.BAG_WARNING:
+      return `We have ${triggerData?.currentBags || 'a lot of'} bags. Teach the player about bag management — play LOW to avoid overtricks.`;
+    case TRIGGER.SPADES_BROKEN:
+      return 'Spades just got broken. Explain what this means — spades can now be led, which changes the game.';
+    case TRIGGER.PARTNER_VOID_DETECTED:
+      return 'Partner just showed a void. Teach the player what a void means and how to use that information.';
+    case TRIGGER.OPPONENT_VOID_DETECTED:
+      return 'An opponent showed a void. Teach the player what this means for their high cards in that suit.';
+    case TRIGGER.ROUND_COMPLETE:
+      return 'The round just ended. Give a brief analysis of how it went — what went well, what to improve next round.';
+    default:
+      return 'Have a teaching conversation about the current game situation.';
+  }
+}
+// ═════════════════════════════════════════════════════════════════════════════
+// API COMMUNICATION — Talk to Ray's AI brain
+// ═════════════════════════════════════════════════════════════════════════════
+/**
+ * Sends a conversation to the server API proxy, which forwards
+ * it to Claude Haiku and returns Ray's response.
  *
- * @param {string} systemPrompt — Ray's personality + current context
- * @param {Array} messages — Conversation history in Anthropic format
- * @param {string} [model] — Model to use (defaults to Haiku)
- * @returns {Promise<string>} — Ray's response text
+ * @param {string} systemPrompt — Ray's personality + game context
+ * @param {Array} messages — conversation history
+ * @returns {Promise<string>} — Ray's reply text
  */
 async function callRayAPI(systemPrompt, messages, model = 'claude-haiku-4-5-20251001') {
   try {
@@ -307,127 +359,31 @@ async function callRayAPI(systemPrompt, messages, model = 'claude-haiku-4-5-2025
       body: JSON.stringify({ systemPrompt, messages, model }),
     });
     if (!response.ok) {
-      const err = await response.text();
-      throw new Error(`API ${response.status}: ${err}`);
+      const errData = await response.json().catch(() => ({}));
+      console.error('Ray API error:', errData.error || response.status);
+      return getFallbackResponse();
     }
     const data = await response.json();
-    return data.response || '[Ray is stumped right now]';
+    return data.reply || getFallbackResponse();
   } catch (err) {
-    console.error('[Ray API] Error:', err);
-    return "Sorry, I lost my train of thought. What were you asking?";
+    console.error('Ray API network error:', err.message);
+    return getFallbackResponse();
   }
 }
-// ═════════════════════════════════════════════════════════════════════════════
-// PUBLIC API — Exported functions used by triggers.js and app.js
-// ═════════════════════════════════════════════════════════════════════════════
 /**
- * Starts a new Ray-initiated teaching moment.
- * Called by triggers.js when a teaching event occurs.
- *
- * @param {string} triggerType — what just happened (from TRIGGER enum)
- * @param {Object} state — current game state
- * @param {Object} [triggerData] — extra info about the trigger
- * @param {string} [playerMode] — player skill level
- * @returns {Promise<Object|null>} — the new conversation object, or null if skipped
+ * If the API is down or erroring, Ray still says SOMETHING
+ * instead of going silent.
  */
-export async function startTeachingMoment(triggerType, state, triggerData = {}, playerMode) {
-  // Don't interrupt an active conversation
-  if (activeConversation) {
-    console.log(`[Ray] Already talking — skipping new trigger ${triggerType}`);
-    return null;
-  }
-  // Check if we should auto-teach
-  if (!shouldAutoTeach(triggerType, state)) {
-    console.log(`[Ray] Priority check failed — skipping ${triggerType}`);
-    return null;
-  }
-  // Gather game context
-  const gameContext = buildGameContext(state, triggerType, triggerData);
-  const systemPrompt = buildSystemPrompt(gameContext, playerMode);
-  // Use Sonnet for opening message where card reasoning matters most
-  const openingMessage = await callRayAPI(systemPrompt, [
-    { role: 'user', content: 'What should I know right now?' },
-  ], 'claude-sonnet-4-6');
-  // Create new conversation
-  conversationCounter++;
-  activeConversation = {
-    id: `conversation-${conversationCounter}`,
-    triggerType,
-    systemPrompt,
-    messages: [{ role: 'assistant', content: openingMessage }],
-    createdAt: Date.now(),
-  };
-  return { ...activeConversation };
-}
-/**
- * Player responds to Ray.
- * Called when the player types a message in the chat.
- � *
- * @param {string} playerMessage — what the player typed
- * @returns {Promise<Object|null>} — updated conversation, or null if none active
- */
-export async function sendPlayerMessage(playerMessage) {
-  if (!activeConversation) {
-    console.warn('[Ray] No active conversation for player message');
-    return null;
-  }
-  // Append player message to history
-  activeConversation.messages.push({ role: 'user', content: playerMessage });
-  // Build messages array for API (opening message + all exchanges)
-  const messagesForAPI = [
-    { role: 'user', content: 'What should I know right now?' },
-    ...activeConversation.messages,
+function getFallbackResponse() {
+  const fallbacks = [
+    `Let me think about that one for a second...`,
+    `Hold that thought — I need a minute.`,
+    `We'll come back to that.`,
+    `My mind went blank for a second there. Keep playing.`,
   ];
-  // Get Ray's reply (uses default Haiku for follow-ups)
-  const reply = await callRayAPI(
-    activeConversation.systemPrompt,
-    messagesForAPI
-  );
-  // Append Ray's reply to history
-  activeConversation.messages.push({ role: 'assistant', content: reply });
-  return { ...activeConversation };
+  return fallbacks[Math.floor(Math.random() * fallbacks.length)];
 }
-/**
- * Starts a new conversation initiated by the PAYER (not a trigger).
- * Used when player clicks "Chat with Ray" or types without an active conversation.
- *
- * @param {string} playerMessage — what the player typed
- * @param {Object} state — current game state
- * @param {string} [playerMode] — player skill level
- * @returns {Promise<Object>} — the new conversation object
- */
-export async function startPlayerInitiatedChat(playerMessage, state, playerMode) {
-  // If conversation is already active, just send the message to it
-  if (activeConversation) {
-    return sendPlayerMessage(playerMessage);
-  }
-  const gameContext = buildGameContext(state);
-  const systemPrompt = buildSystemPrompt(gameContext, playerMode);
-  // Use Haiku for player-initiated chats (conversational, no card analysis)
-  const reply = await callRayAPI(systemPrompt, [
-    { role: 'user', content: playerMessage },
-  ]);
-  conversationCounter++;
-  activeConversation = {
-    id: `conversation-${conversationCounter}`,
-    triggerType: 'player_initiated',
-    systemPrompt,
-    messages: [
-      { role: 'user', content: playerMessage },
-      { role: 'assistant', content: reply },
-    ],
-    createdAt: Date.now(),
-  };
-  return { ...activeConversation };
-}
-/**
- * Gets the current active conversation (or null).
- */
-export function getConversation() {
-  return activeConversation ? { ...activeConversation } : null;
-}
-/**
- * Return �════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 // PUBLIC API — What the game controller and UI call
 // ═════════════════════════════════════════════════════════════════════════════
 /**
