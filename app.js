@@ -55,10 +55,9 @@ let lastShownConvoId = null;   // auto-shows panel when a new Ray message fires
 // Stored so card-click handlers can reference the live hand after render
 let _currentHand       = [];
 let _currentLegalCards = [];
-
-let askRayMode         = false;   // when on, card tap → ask Ray instead of play
-let _flashWinningSeat  = null;    // seat label that flashes after winning a trick
-let _prevTricksWon     = {};      // previous tricks_won snapshot for delta detection
+let askRayModeOn       = false;  // when ON, card tap asks Ray instead of playing
+let _lastTrickWinner   = null;   // seat that just won a trick; cleared after flash
+let _prevTricksWon     = {};     // snapshot used to detect new trick wins
 
 // ═════════════════════════════════════════════════════════════════════════════
 // LAYOUT INIT — three persistent fixed zones
@@ -110,45 +109,49 @@ function updateHandTray(hand, legalCards = [], isMyTurn = false, label = 'Your H
     : 'var(--color-text-muted)';
   const labelWeight = isMyTurn ? '600' : '400';
 
-const askRayBtn = isMyTurn ? `
-    <button class="ask-ray-toggle ${askRayMode ? 'ask-ray-toggle--active' : ''}" id="ask-ray-toggle" title="Toggle Ask Ray mode">
-      🤔${askRayMode ? ' On' : ''}
-    </button>` : '';
+  const askRayBtnHTML = isMyTurn ? `
+    <button
+      id="ask-ray-toggle"
+      class="btn btn--ray btn--ray-toggle${askRayModeOn ? ' btn--ray-toggle--on' : ''}"
+    >${askRayModeOn ? '🟡 Asking Ray' : '♠ Ask Ray'}</button>
+  ` : '';
 
   handTrayEl.innerHTML = `
-    <div class="hand-tray__label" style="color:${labelColor}; font-weight:${labelWeight}; display:flex; align-items:center; gap:8px; justify-content:center;">
-      <span>${label}</span>${askRayBtn}
+    <div class="hand-tray__top-row">
+      <div class="hand-tray__label" style="color:${labelColor}; font-weight:${labelWeight};">
+        ${label}
+      </div>
+      ${askRayBtnHTML}
     </div>
     <div class="hand-row" id="hand-row-cards">${handHTML}</div>
   `;
   handTrayEl.classList.add('hand-tray--visible');
 
-  // Ask Ray toggle
-  document.getElementById('ask-ray-toggle')?.addEventListener('click', e => {
-    e.stopPropagation();
-    askRayMode = !askRayMode;
-    updateHandTray(_currentHand, _currentLegalCards, true,
-      askRayMode ? '🤔 Ask Ray mode — tap a card to consult' : 'Your turn — tap a card');
+  // Wire Ask Ray toggle
+  document.getElementById('ask-ray-toggle')?.addEventListener('click', () => {
+    askRayModeOn = !askRayModeOn;
+    const btn = document.getElementById('ask-ray-toggle');
+    if (btn) {
+      btn.textContent = askRayModeOn ? '🟡 Asking Ray' : '♠ Ask Ray';
+      btn.classList.toggle('btn--ray-toggle--on', askRayModeOn);
+    }
   });
 
   // Wire card clicks
   if (isMyTurn) {
     handTrayEl.querySelectorAll('.card[data-card-id]').forEach(el => {
       if (el.classList.contains('card--illegal')) return;
-      el.addEventListener('click', () => {
+      el.addEventListener('click', async () => {
         const cardId = el.dataset.cardId;
         const card = _currentHand.find(c => c.id === cardId);
         if (!card) return;
-        if (askRayMode) {
-          const cardName = cardLabel(card);
-          const msg = `I'm thinking of playing the ${cardName} — is that a good idea? What should I be considering?`;
-          rayPanelVisible = true;
-          if (rayPanelEl) rayPanelEl.classList.add('ray-panel--active');
-          (async () => {
-            if (!isConversationActive()) await askRay();
-            await sendPlayerMessage(msg, getState());
-            updateRayPanel();
-          })();
+        if (askRayModeOn) {
+          if (!isConversationActive()) await askRay();
+          const suitNames = { S: 'spades', H: 'hearts', D: 'diamonds', C: 'clubs' };
+          const rank = cardLabel(card).replace(suitSymbol(card.suit), '');
+          const suit = suitNames[card.suit] || card.suit;
+          await sendPlayerMessage(`Should I play the ${rank} of ${suit}?`, getState());
+          updateRayPanel();
         } else {
           handleHumanPlay(card);
         }
@@ -311,17 +314,19 @@ function renderModeSelect() {
 function renderGame(state) {
   if (!state) return;
 
-  // Detect who just won a trick — set flash seat
-  if (state.tricks_won && Object.keys(_prevTricksWon).length > 0) {
+  // Detect trick winner: one seat's trick count went up since last render
+  if (state.status === GAME_PHASE.PLAYING && Object.keys(_prevTricksWon).length > 0) {
     for (const seat of PLAYER_SEATS) {
       if ((state.tricks_won[seat] || 0) > (_prevTricksWon[seat] || 0)) {
-        _flashWinningSeat = seat;
-        setTimeout(() => { _flashWinningSeat = null; }, 2000);
+        _lastTrickWinner = seat;
+        setTimeout(() => { _lastTrickWinner = null; }, 1200);
         break;
       }
     }
   }
-  if (state.tricks_won) _prevTricksWon = { ...state.tricks_won };
+  if (state.status === GAME_PHASE.PLAYING) {
+    _prevTricksWon = { ...state.tricks_won };
+  }
 
   switch (state.status) {
     case GAME_PHASE.BIDDING:   renderBiddingScreen(state);  break;
@@ -406,17 +411,17 @@ function renderPlayingScreen(state) {
 
   // Hand goes into the fixed tray
   const turnLabel = isMyTurn
-    ? (askRayMode ? '🤔 Ask Ray mode — tap a card to consult' : 'Your turn — tap a card')
+    ? 'Your turn — tap a card'
     : `Waiting for ${state.current_turn}...`;
   updateHandTray(hand, legalCards, isMyTurn, turnLabel);
 
   const trickHTML  = renderTrickArea(state);
   const bidSummary = PLAYER_SEATS.map(seat => {
-    const label  = seat === HUMAN_SEAT ? 'You' : seat.charAt(0).toUpperCase();
-    const bid    = state.bids[seat] === 0 ? 'NIL' : state.bids[seat];
-    const tricks = state.tricks_won[seat];
-    const flash  = seat === _flashWinningSeat ? ' bid-seat--flash' : '';
-    return `<span class="bid-seat${flash}" style="margin: 0 6px;">${label}: ${bid}(${tricks})</span>`;
+    const label    = seat === HUMAN_SEAT ? 'You' : seat.charAt(0).toUpperCase();
+    const bid      = state.bids[seat] === 0 ? 'NIL' : state.bids[seat];
+    const tricks   = state.tricks_won[seat];
+    const isWinner = seat === _lastTrickWinner;
+    return `<span style="margin: 0 6px;"${isWinner ? ' class="trick-winner-flash"' : ''}>${label}: ${bid}(${tricks})</span>`;
   }).join('');
 
   gameContentEl.innerHTML = `
@@ -743,36 +748,6 @@ styleEl.textContent = `
   }
   .ray-chat-input:focus { border-color: var(--color-accent-gold); }
 
-/* ── Ask Ray toggle ──────────────────────────────────────────────────────── */
-  .ask-ray-toggle {
-    background: none;
-    border: 1px solid var(--color-accent-gold);
-    color: var(--color-accent-gold-lt);
-    font-size: 0.72rem;
-    padding: 3px 9px;
-    border-radius: 12px;
-    cursor: pointer;
-    opacity: 0.7;
-    transition: all 0.15s;
-    white-space: nowrap;
-  }
-  .ask-ray-toggle:hover { opacity: 1; background: rgba(200, 148, 26, 0.15); }
-  .ask-ray-toggle--active {
-    background: rgba(200, 148, 26, 0.25);
-    opacity: 1;
-    border-color: var(--color-accent-gold-lt);
-  }
-
-  /* ── Trick winner flash ──────────────────────────────────────────────────── */
-  @keyframes trickWinFlash {
-    0%   { color: var(--color-text-secondary); font-weight: 400; }
-    15%  { color: var(--color-accent-gold-lt); font-weight: 700; }
-    85%  { color: var(--color-accent-gold-lt); font-weight: 700; }
-    100% { color: var(--color-text-secondary); font-weight: 400; }
-  }
-  .bid-seat--flash {
-    animation: trickWinFlash 1.8s ease forwards;
-  }
   /* ── Talk to Ray button ──────────────────────────────────────────────────── */
   .btn--ray {
     background: rgba(200, 148, 26, 0.15);
@@ -950,6 +925,40 @@ styleEl.textContent = `
     .game-screen-padded {
       padding-bottom: ${HAND_TRAY_HEIGHT + 16}px !important;
     }
+  }
+
+  /* ── Hand tray top row (label + Ask Ray toggle) ──────────────────────────── */
+  .hand-tray__top-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    margin-bottom: 4px;
+    width: 100%;
+  }
+  .hand-tray__top-row .hand-tray__label {
+    margin-bottom: 0;
+  }
+  .btn--ray-toggle {
+    font-size: 0.7rem;
+    padding: 4px 10px;
+    opacity: 0.65;
+    transition: opacity 0.2s, background 0.2s, box-shadow 0.2s;
+  }
+  .btn--ray-toggle--on {
+    opacity: 1;
+    background: rgba(200, 148, 26, 0.3);
+    box-shadow: 0 0 8px rgba(200, 148, 26, 0.4);
+  }
+
+  /* ── Trick winner flash ───────────────────────────────────────────────────── */
+  @keyframes trickWinFlash {
+    0%   { font-weight: 700; color: var(--color-accent-gold-lt); }
+    70%  { font-weight: 700; color: var(--color-accent-gold-lt); }
+    100% { font-weight: 400; color: var(--color-text-secondary); }
+  }
+  .trick-winner-flash {
+    animation: trickWinFlash 1.2s ease-out forwards;
   }
 `;
 document.head.appendChild(styleEl);
