@@ -28,7 +28,6 @@
  *            getConversation, isConversationActive,
  *            dismissConversation } from './coachState.js';
  */
-
 import { TRIGGER } from './triggers.js';
 import { buildSystemPrompt, buildTeachingPrompt } from './rayPrompt.js';
 import { getBidRecommendation } from './biddingTutor.js';
@@ -43,11 +42,9 @@ import {
   SUIT_SYMBOL,
 } from '../engine/constants.js';
 import { cardLabel } from '../engine/cardUtils.js';
-
 // ═════════════════════════════════════════════════════════════════════════════
 // CONVERSATION STATE — Ray's notebook for the current dialogue
 // ═════════════════════════════════════════════════════════════════════════════
-
 /**
  * Module-level conversation state.
  * Only ONE conversation active at a time — Ray doesn't talk over himself.
@@ -56,11 +53,9 @@ import { cardLabel } from '../engine/cardUtils.js';
  */
 let activeConversation = null;
 let conversationCounter = 0;
-
 // ═════════════════════════════════════════════════════════════════════════════
 // TEACHING PRIORITY — Decides when Ray speaks up automatically
 // ═════════════════════════════════════════════════════════════════════════════
-
 /**
  * Teaching priority levels determine which moments trigger
  * Ray automatically vs. waiting for the player to ask.
@@ -82,7 +77,6 @@ const TRIGGER_PRIORITY = {
   [TRIGGER.OPPONENT_VOID_DETECTED]:'LOW',
   [TRIGGER.ROUND_COMPLETE]:       'LOW',
 };
-
 /**
  * Should Ray auto-start a conversation for this trigger?
  * Depends on priority + player mode + verbosity setting.
@@ -94,10 +88,8 @@ const TRIGGER_PRIORITY = {
 function shouldAutoTeach(triggerType, state) {
   const priority = TRIGGER_PRIORITY[triggerType];
   if (!priority) return false;
-
   const verbosity = state.settings?.verbosity ?? 2;
   const mode = state.mode || PLAYER_MODE.BEGINNER;
-
   if (priority === 'HIGH') return verbosity >= 1;
   if (priority === 'MEDIUM') {
     if (mode === PLAYER_MODE.BEGINNER) return verbosity >= 2;
@@ -107,14 +99,11 @@ function shouldAutoTeach(triggerType, state) {
     if (mode === PLAYER_MODE.BEGINNER) return verbosity >= 3;
     return verbosity >= 4;
   }
-
   return false;
 }
-
 // ═════════════════════════════════════════════════════════════════════════════
 // GAME CONTEXT BUILDER — Translates game state into plain English for Ray
 // ═════════════════════════════════════════════════════════════════════════════
-
 /**
  * Reads the current game state and builds a plain-language context
  * object that gets injected into Ray's system prompt.
@@ -126,18 +115,29 @@ function shouldAutoTeach(triggerType, state) {
  */
 function buildGameContext(state, triggerType, triggerData) {
   const context = {};
-
   // Phase
   context.phase = state.phase;
-
-  // Player's hand (human-readable)
+  // Player's hand — both as a list AND as an explicit suit breakdown
+  // The breakdown prevents Ray from having to count and getting it wrong
   const humanHand = state.hands?.[HUMAN_SEAT];
   if (humanHand && humanHand.length > 0) {
     context.hand = humanHand
       .map(c => `${RANK_DISPLAY[c.rank]}${SUIT_SYMBOL[c.suit]}`)
       .join(', ');
-  }
 
+    // Pre-calculate suit breakdown so Ray always has exact counts
+    const suitGroups = {};
+    for (const card of humanHand) {
+      const suitName = card.suit;
+      const sym = SUIT_SYMBOL[suitName];
+      if (!suitGroups[sym]) suitGroups[sym] = { count: 0, ranks: [], suit: suitName };
+      suitGroups[sym].count++;
+      suitGroups[sym].ranks.push(RANK_DISPLAY[card.rank]);
+    }
+    context.handBySuit = Object.values(suitGroups)
+      .map(g => `${g.suit} (${g.count}): ${g.ranks.join(', ')}`)
+      .join(' | ');
+  }
   // Bids
   if (state.bids) {
     const bidEntries = Object.entries(state.bids)
@@ -152,7 +152,6 @@ function buildGameContext(state, triggerType, triggerData) {
       context.bids = bidEntries.join(', ');
     }
   }
-
   // Tricks won
   if (state.tricks_won) {
     const humanTeam = (state.tricks_won[HUMAN_SEAT] || 0) +
@@ -160,16 +159,13 @@ function buildGameContext(state, triggerType, triggerData) {
     const oppTeam = Object.entries(state.tricks_won)
       .filter(([seat]) => seat !== HUMAN_SEAT && seat !== SEAT_PARTNER[HUMAN_SEAT])
       .reduce((sum, [_, t]) => sum + t, 0);
-
     context.tricksWon = humanTeam;
     context.opponentTricksWon = oppTeam;
-
     // How many more do we need?
     const teamBid = (state.bids?.[HUMAN_SEAT] || 0) +
                     (state.bids?.[SEAT_PARTNER[HUMAN_SEAT]] || 0);
     context.tricksNeeded = Math.max(0, teamBid - humanTeam);
   }
-
   // Current trick
   if (state.current_trick && state.current_trick.length > 0) {
     context.currentTrick = state.current_trick
@@ -181,12 +177,10 @@ function buildGameContext(state, triggerType, triggerData) {
       })
       .join(', ');
   }
-
   // Bags
   if (state.scores?.north_south?.bags !== undefined) {
     context.bags = state.scores.north_south.bags;
   }
-
   // Scores
   if (state.scores) {
     context.scores = {
@@ -194,13 +188,11 @@ function buildGameContext(state, triggerType, triggerData) {
       them: state.scores.east_west?.total ?? 0,
     };
   }
-
   // Nil status
   const humanNil = state.nil_status?.[HUMAN_SEAT];
   const partnerNil = state.nil_status?.[SEAT_PARTNER[HUMAN_SEAT]];
   if (humanNil) context.nilStatus = `You bid nil (status: ${humanNil})`;
   if (partnerNil) context.nilStatus = `Partner bid nil (status: ${partnerNil})`;
-
   // Bid recommendation (during bidding phase)
   if (state.phase === GAME_PHASE.BIDDING) {
     try {
@@ -215,7 +207,6 @@ function buildGameContext(state, triggerType, triggerData) {
       // Bidding tutor may not work in all states
     }
   }
-
   // Play recommendation (during play phase, human's turn)
   if (state.phase === GAME_PHASE.PLAYING && state.current_turn === HUMAN_SEAT) {
     try {
@@ -228,7 +219,6 @@ function buildGameContext(state, triggerType, triggerData) {
       // Play advisor may not work in all states
     }
   }
-
   // Partner inference
   try {
     const partnerRead = getPartnerRead(state);
@@ -239,15 +229,12 @@ function buildGameContext(state, triggerType, triggerData) {
   } catch (e) {
     // Partner inference may not work in all states
   }
-
   // What triggered this conversation
   if (triggerType && triggerData) {
     context.triggerDescription = describeTrigger(triggerType, triggerData);
   }
-
   return context;
 }
-
 /**
  * Converts a trigger event into plain English for Ray's context.
  */
@@ -281,11 +268,9 @@ function describeTrigger(triggerType, triggerData) {
       return `Game event: ${triggerType}`;
   }
 }
-
 // ═════════════════════════════════════════════════════════════════════════════
 // TEACHING TOPIC DESCRIPTIONS — What Ray opens with
 // ═════════════════════════════════════════════════════════════════════════════
-
 /**
  * Maps trigger types to teaching topic descriptions for the
  * focused system prompt.
@@ -293,7 +278,18 @@ function describeTrigger(triggerType, triggerData) {
 function getTeachingTopic(triggerType, triggerData) {
   switch (triggerType) {
     case TRIGGER.BIDDING_START:
-      return 'Help the player think through their bid. Ask them what they see in their hand. Guide them through counting sure tricks (aces, protected kings) and spade length.';
+      return `WALK THE PLAYER THROUGH COUNTING THEIR HAND. Do NOT open with a question like "what do you see?" — the player is a beginner and doesn't know what to look for yet. YOU go first. YOU do the analysis. Follow this structure:
+
+1. Tell them their spade count and quality. Spades are trump — each one is a candidate for a trick. High spades (A, K, Q, J) are stronger than low ones (2-8).
+2. Point out aces across all suits — aces are GUARANTEED tricks, call them "sure things."
+3. Mention any kings with backup (another card of the same suit) — those are "likely" tricks.
+4. Give them a specific bid recommendation based on what you see in their hand.
+5. THEN close with ONE short question to confirm they're following — not asking them to do the analysis themselves.
+
+The context includes "Hand by suit" with EXACT counts and card values — USE THOSE EXACT NUMBERS. Do not recount or estimate. If it says spades (3): J, 8, 4 — then they have exactly 3 spades: Jack, 8, and 4.
+
+Keep your opening to 3-5 sentences. You're teaching them HOW to count, not testing whether they already know.`;
+
     case TRIGGER.ALL_BIDS_IN:
       return 'React to the bid totals. If overbid (total > 13), explain what that means. If team bid is high, pump them up. If low, reassure.';
     case TRIGGER.HUMAN_TURN:
@@ -324,11 +320,9 @@ function getTeachingTopic(triggerType, triggerData) {
       return 'Have a teaching conversation about the current game situation.';
   }
 }
-
 // ═════════════════════════════════════════════════════════════════════════════
 // API COMMUNICATION — Talk to Ray's AI brain
 // ═════════════════════════════════════════════════════════════════════════════
-
 /**
  * Sends a conversation to the server API proxy, which forwards
  * it to Claude Haiku and returns Ray's response.
@@ -344,13 +338,11 @@ async function callRayAPI(systemPrompt, messages) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ systemPrompt, messages }),
     });
-
     if (!response.ok) {
       const errData = await response.json().catch(() => ({}));
       console.error('Ray API error:', errData.error || response.status);
       return getFallbackResponse();
     }
-
     const data = await response.json();
     return data.reply || getFallbackResponse();
   } catch (err) {
@@ -358,7 +350,6 @@ async function callRayAPI(systemPrompt, messages) {
     return getFallbackResponse();
   }
 }
-
 /**
  * If the API is down or erroring, Ray still says SOMETHING
  * instead of going silent.
@@ -372,11 +363,9 @@ function getFallbackResponse() {
   ];
   return fallbacks[Math.floor(Math.random() * fallbacks.length)];
 }
-
 // ═════════════════════════════════════════════════════════════════════════════
 // PUBLIC API — What the game controller and UI call
 // ═════════════════════════════════════════════════════════════════════════════
-
 /**
  * Checks if a trigger should start a teaching conversation.
  * If yes, starts the conversation and returns the initial message.
@@ -392,13 +381,10 @@ function getFallbackResponse() {
 export async function checkForTeachingMoment(state, triggerType, triggerData) {
   // Don't interrupt an active conversation
   if (activeConversation) return null;
-
   // Should Ray speak up automatically?
   if (!shouldAutoTeach(triggerType, state)) return null;
-
   return await startTeachingMoment(state, triggerType, triggerData);
 }
-
 /**
  * Starts a teaching conversation about a specific trigger.
  * Can be called automatically (from checkForTeachingMoment) or
@@ -413,14 +399,11 @@ export async function startTeachingMoment(state, triggerType, triggerData = {}) 
   const context = buildGameContext(state, triggerType, triggerData);
   const topic = getTeachingTopic(triggerType, triggerData);
   const systemPrompt = buildTeachingPrompt(topic, context);
-
   // Ray's opening message
   const openingMessage = await callRayAPI(systemPrompt, [
     { role: 'user', content: 'What should I know right now?' },
   ]);
-
   conversationCounter++;
-
   activeConversation = {
     id: conversationCounter,
     triggerType,
@@ -431,14 +414,12 @@ export async function startTeachingMoment(state, triggerType, triggerData = {}) 
     startedAt: Date.now(),
     resolved: false,
   };
-
   return {
     id: activeConversation.id,
     rayMessage: openingMessage,
     isActive: true,
   };
 }
-
 /**
  * Sends the player's typed response to Ray and gets his reply.
  * This is the back-and-forth — no dead ends, no multiple choice limits.
@@ -454,13 +435,11 @@ export async function sendPlayerMessage(playerMessage, state = null) {
       isActive: false,
     };
   }
-
   // Add player message to history
   activeConversation.messages.push({
     role: 'user',
     content: playerMessage,
   });
-
   // If fresh state provided, update context in system prompt
   let systemPrompt = activeConversation.systemPrompt;
   if (state) {
@@ -471,20 +450,16 @@ export async function sendPlayerMessage(playerMessage, state = null) {
     );
     activeConversation.systemPrompt = systemPrompt;
   }
-
   // Get Ray's response
   const rayReply = await callRayAPI(systemPrompt, activeConversation.messages);
-
   // Add to history
   activeConversation.messages.push({
     role: 'assistant',
     content: rayReply,
   });
-
   // Check if conversation is getting long (keep API costs reasonable)
   const messageCount = activeConversation.messages.length;
   const isGettingLong = messageCount > 12;
-
   return {
     id: activeConversation.id,
     rayMessage: rayReply,
@@ -493,7 +468,6 @@ export async function sendPlayerMessage(playerMessage, state = null) {
     hint: isGettingLong ? 'Ray might wrap up soon — you can always start a new conversation later.' : null,
   };
 }
-
 /**
  * Player-initiated conversation — when they click "Talk to Ray"
  * without a specific trigger. Ray offers general help based on
@@ -507,20 +481,16 @@ export async function startPlayerInitiatedConversation(state) {
   let triggerType = TRIGGER.HUMAN_TURN;
   if (state.phase === GAME_PHASE.BIDDING) triggerType = TRIGGER.BIDDING_START;
   if (state.phase === GAME_PHASE.ROUND_END) triggerType = TRIGGER.ROUND_COMPLETE;
-
   // Dismiss any existing conversation
   dismissConversation();
-
   return await startTeachingMoment(state, triggerType, {});
 }
-
 /**
  * Returns the active conversation object, or null.
  * Used by the UI to display the conversation panel.
  */
 export function getActiveConversation() {
   if (!activeConversation) return null;
-
   return {
     id: activeConversation.id,
     messages: activeConversation.messages.map(m => ({
@@ -530,14 +500,12 @@ export function getActiveConversation() {
     isActive: !activeConversation.resolved,
   };
 }
-
 /**
  * Is there a conversation currently active?
  */
 export function isConversationActive() {
   return activeConversation !== null && !activeConversation.resolved;
 }
-
 /**
  * Dismiss the current conversation. Player is done talking.
  */
@@ -547,7 +515,6 @@ export function dismissConversation() {
   }
   activeConversation = null;
 }
-
 /**
  * Reset all conversation state. Called on new game.
  */
@@ -555,7 +522,6 @@ export function resetConversationState() {
   activeConversation = null;
   conversationCounter = 0;
 }
-
 /**
  * Get conversation history length (for UI display).
  */
