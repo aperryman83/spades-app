@@ -8,17 +8,14 @@
  * Rule: if a constant would need to change for JJDD, it does NOT belong here.
  * It belongs in engine/rules/standardSpades.js.
  */
-
 /** The four suits. Order is display order only — no trump hierarchy implied. */
 export const SUITS = ['spades', 'hearts', 'diamonds', 'clubs'];
-
 /**
  * Standard rank integers 2–14.
  * Ace is always stored as 14 internally regardless of variant.
  * These are the raw values; sort order is defined per-variant in the rules module.
  */
 export const STANDARD_RANKS = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14];
-
 /** Human-readable display labels for face cards and ace. */
 export const RANK_DISPLAY = {
   2:  '2',
@@ -35,7 +32,6 @@ export const RANK_DISPLAY = {
   13: 'K',
   14: 'A',
 };
-
 /** Unicode suit symbols. */
 export const SUIT_SYMBOL = {
   spades:   '♠',
@@ -43,10 +39,8 @@ export const SUIT_SYMBOL = {
   diamonds: '♦',
   clubs:    '♣',
 };
-
 /** The four player seats, in clockwise order starting from North. */
 export const PLAYER_SEATS = ['north', 'south', 'east', 'west'];
-
 /** Fast integer index lookup for seats. */
 export const SEAT_INDEX = {
   north: 0,
@@ -54,13 +48,11 @@ export const SEAT_INDEX = {
   east:  2,
   west:  3,
 };
-
 /** Partnerships. South is always the human player. */
 export const PARTNERSHIPS = {
   northSouth: ['north', 'south'],
   eastWest:   ['east', 'west'],
 };
-
 /** Lookup: which partnership does a given seat belong to? */
 export const SEAT_TO_PARTNERSHIP = {
   north: 'northSouth',
@@ -68,7 +60,6 @@ export const SEAT_TO_PARTNERSHIP = {
   east:  'eastWest',
   west:  'eastWest',
 };
-
 /** Which seat is the partner of a given seat? */
 export const SEAT_PARTNER = {
   north: 'south',
@@ -76,7 +67,6 @@ export const SEAT_PARTNER = {
   east:  'west',
   west:  'east',
 };
-
 /** Clockwise play order from any given seat. */
 export const CLOCKWISE_FROM = {
   north: ['north', 'east', 'south', 'west'],
@@ -84,32 +74,24 @@ export const CLOCKWISE_FROM = {
   south: ['south', 'west', 'north', 'east'],
   west:  ['west',  'north', 'east', 'south'],
 };
-
 /** Fixed number of tricks per hand in all variants. */
 export const MAX_TRICKS_PER_HAND = 13;
-
 /** Bags threshold at which the penalty fires. NOT variant-specific — all variants use 10. */
 export const DEFAULT_BAG_LIMIT = 10;
-
 /** Score deducted when bag penalty fires. */
 export const DEFAULT_BAG_PENALTY = 100;
-
 /** Score at which a team wins the game. */
 export const WIN_SCORE = 500;
-
 /** Score at which a team loses the game (mercy rule). */
 export const LOSS_SCORE = -200;
-
 /** The human player is always South. */
 export const HUMAN_SEAT = 'south';
-
 /**
  * Bid special values.
  * NIL is stored as integer 0 internally.
  * The UI must never render the value 0 as a label — it always shows "NIL".
  */
 export const BID_NIL = 0;
-
 /**
  * Nil outcome states. Stored on a player's nil_status field during a round.
  * null  = player did not bid nil this round
@@ -123,7 +105,6 @@ export const NIL_STATUS = {
   MADE:    'made',
   FAILED:  'failed',
 };
-
 /** Game phases, used on gameState.phase */
 export const GAME_PHASE = {
   INIT:       'init',
@@ -134,20 +115,31 @@ export const GAME_PHASE = {
   ROUND_END:  'round_end',
   GAME_OVER:  'game_over',
 };
-
 /** Player modes from the product spec. */
 export const PLAYER_MODE = {
   BEGINNER: 'beginner',
   MEDIUM:   'medium',
   ADVANCED: 'advanced',
 };
-
 /** Active ruleset names. Only 'standard' is implemented in MVP. */
 export const RULESET = {
   STANDARD: 'standard',
   JJDD:     'jjdd', // Phase 2 — not implemented
 };
+/**
+ * Bot delay ranges in milliseconds (simulates thinking).
+ * Values are mode-aware — beginners get slower bots so there's
+ * time to read Ray's coaching before the next card drops.
+ *
+ * To change game speed, adjust these values:
+ *   - Lower numbers = faster game
+ *   - Higher numbers = slower game (more time to learn)
+ */
+export const BOT_DELAY_MIN_MS = 800;   // Advanced mode minimum (was 500)
+export const BOT_DELAY_MAX_MS = 1400;  // Advanced mode maximum (was 900)
 
-/** Bot delay range in milliseconds (simulates thinking). */
-export const BOT_DELAY_MIN_MS = 500;
-export const BOT_DELAY_MAX_MS = 900;
+export const BOT_DELAY_MEDIUM_MIN_MS = 1200;
+export const BOT_DELAY_MEDIUM_MAX_MS = 2000;
+
+export const BOT_DELAY_BEGINNER_MIN_MS = 1800;
+export const BOT_DELAY_BEGINNER_MAX_MS = 2800;

@@ -4,12 +4,14 @@
  * Single entry point. index.html loads only this file.
  * Handles: splash screen, mode select, and wiring the game UI
  * to the game controller.
+ *
+ * Layout: #app-root contains two children:
+ *   #game-content — the game screen (replaced on every render)
+ *   #ray-panel    — Uncle Ray's chat (persistent, updated independently)
  */
-
 // ── Engine layer ──────────────────────────────────────────────────────────────
 import { GAME_PHASE, PLAYER_MODE, HUMAN_SEAT, PLAYER_SEATS, SEAT_PARTNER } from './engine/constants.js';
 import { cardLabel, suitSymbol, isTrumpCard, sortHand } from './engine/cardUtils.js';
-
 // ── Controller ────────────────────────────────────────────────────────────────
 import {
   initGame,
@@ -18,21 +20,121 @@ import {
   handleNextRound,
   getState,
   getHumanLegalCards,
+  askRay,
 } from './controller/gameController.js';
-
+// ── Coach (Uncle Ray) ─────────────────────────────────────────────────────────
+import {
+  getActiveConversation,
+  sendPlayerMessage,
+  dismissConversation,
+  isConversationActive,
+} from './coach/coachState.js';
 // ── Utils ─────────────────────────────────────────────────────────────────────
 import logger from './utils/logger.js';
 import { MODE_LABELS } from './utils/helpers.js';
-
-// ── Root element ──────────────────────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════════════════
+// LAYOUT — Two persistent zones inside #app-root
+// ═════════════════════════════════════════════════════════════════════════════
 const root = document.getElementById('app-root');
+let gameContentEl = null;
+let rayPanelEl = null;
 
+/**
+ * Called once at boot. Splits #app-root into:
+ *   #game-content — swapped out on every render
+ *   #ray-panel    — Ray's chat drawer, lives across renders
+ */
+function initLayout() {
+  root.innerHTML = '<div id="game-content"></div><div id="ray-panel"></div>';
+  gameContentEl = document.getElementById('game-content');
+  rayPanelEl = document.getElementById('ray-panel');
+}
+// ═════════════════════════════════════════════════════════════════════════════
+// RAY PANEL — Uncle Ray's persistent chat drawer
+// ═════════════════════════════════════════════════════════════════════════════
+/**
+ * Reads the active conversation from coachState and rebuilds the Ray panel.
+ * Called after every game render so Ray's panel always reflects current state.
+ */
+function updateRayPanel() {
+  if (!rayPanelEl) return;
+  const convo = getActiveConversation();
+
+  if (!convo || !convo.isActive) {
+    rayPanelEl.classList.remove('ray-panel--active');
+    rayPanelEl.innerHTML = '';
+    return;
+  }
+
+  rayPanelEl.classList.add('ray-panel--active');
+
+  const messagesHTML = convo.messages.map(m => `
+    <div class="ray-chat-msg ray-chat-msg--${m.role === 'assistant' ? 'ray' : 'player'}">
+      ${m.content.replace(/\n\n/g, '</p><p>').replace(/\n/g, '<br>')}
+    </div>
+  `).join('');
+
+  rayPanelEl.innerHTML = `
+    <div class="ray-chat-header">
+      <span class="ray-chat-header__name">♠ Uncle Ray</span>
+      <button class="ray-dismiss-btn" id="ray-dismiss" title="Dismiss">✕</button>
+    </div>
+    <div class="ray-chat-messages" id="ray-messages">${messagesHTML}</div>
+    <div class="ray-chat-input-row">
+      <input
+        class="ray-chat-input"
+        id="ray-input"
+        type="text"
+        placeholder="Ask Uncle Ray..."
+        autocomplete="off"
+      />
+      <button class="btn btn--sm" id="ray-send">Send</button>
+    </div>
+  `;
+
+  // Scroll to latest message
+  const msgs = document.getElementById('ray-messages');
+  if (msgs) msgs.scrollTop = msgs.scrollHeight;
+
+  // Wire dismiss
+  document.getElementById('ray-dismiss')?.addEventListener('click', () => {
+    dismissConversation();
+    updateRayPanel();
+  });
+
+  // Wire send
+  const input = document.getElementById('ray-input');
+  const sendBtn = document.getElementById('ray-send');
+
+  async function sendMessage() {
+    const text = input?.value?.trim();
+    if (!text) return;
+    if (input) input.value = '';
+    if (sendBtn) {
+      sendBtn.disabled = true;
+      sendBtn.textContent = '...';
+    }
+    await sendPlayerMessage(text, getState());
+    if (sendBtn) {
+      sendBtn.disabled = false;
+      sendBtn.textContent = 'Send';
+    }
+    updateRayPanel();
+  }
+
+  sendBtn?.addEventListener('click', sendMessage);
+  input?.addEventListener('keypress', e => {
+    if (e.key === 'Enter') sendMessage();
+  });
+
+  // Focus the input so the player can type immediately
+  setTimeout(() => input?.focus(), 50);
+}
 // ═════════════════════════════════════════════════════════════════════════════
 // SPLASH SCREEN
 // ═════════════════════════════════════════════════════════════════════════════
-
 function renderSplash() {
-  root.innerHTML = `
+  gameContentEl.innerHTML = `
     <div class="screen" style="align-items: center; justify-content: center; gap: 32px;">
       <div class="app-loading">
         <div class="app-loading__spade">♠</div>
@@ -46,11 +148,9 @@ function renderSplash() {
   `;
   document.getElementById('btn-new-game')?.addEventListener('click', renderModeSelect);
 }
-
 // ═════════════════════════════════════════════════════════════════════════════
 // MODE SELECT
 // ═════════════════════════════════════════════════════════════════════════════
-
 function renderModeSelect() {
   const modeButtons = Object.entries(MODE_LABELS).map(([mode, labels]) => `
     <button class="mode-btn" data-mode="${mode}">
@@ -59,8 +159,7 @@ function renderModeSelect() {
       <div class="mode-btn__ray">${labels.rayLine}</div>
     </button>
   `).join('');
-
-  root.innerHTML = `
+  gameContentEl.innerHTML = `
     <div class="screen" style="justify-content: center; gap: 24px;">
       <h2 style="text-align:center; font-size: 1.5rem; color: var(--color-accent-gold-lt);">
         How do you want to play?
@@ -69,25 +168,20 @@ function renderModeSelect() {
       <button class="btn btn--sm" id="btn-back">← Back</button>
     </div>
   `;
-
-  root.querySelectorAll('.mode-btn').forEach(btn => {
+  gameContentEl.querySelectorAll('.mode-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       const mode = btn.dataset.mode;
       logger.info('mode_selected', { mode });
       initGame(mode, renderGame);
     });
   });
-
   document.getElementById('btn-back')?.addEventListener('click', renderSplash);
 }
-
 // ═════════════════════════════════════════════════════════════════════════════
 // GAME RENDERER — called by gameController after every state change
 // ═════════════════════════════════════════════════════════════════════════════
-
 function renderGame(state) {
   if (!state) return;
-
   switch (state.status) {
     case GAME_PHASE.BIDDING:
       renderBiddingScreen(state);
@@ -104,17 +198,16 @@ function renderGame(state) {
     default:
       renderBiddingScreen(state);
   }
+  // Always sync Ray's panel after every game render
+  updateRayPanel();
 }
-
 // ═════════════════════════════════════════════════════════════════════════════
 // BIDDING SCREEN
 // ═════════════════════════════════════════════════════════════════════════════
-
 function renderBiddingScreen(state) {
   const hand = sortHand(state.hands[HUMAN_SEAT], state);
   const isMyTurn = state.current_turn === HUMAN_SEAT;
   const handHTML = hand.map(card => renderCardHTML(card, false, false)).join('');
-
   // Show existing bids
   const bidDisplay = PLAYER_SEATS.map(seat => {
     const bid = state.bids[seat];
@@ -126,7 +219,6 @@ function renderBiddingScreen(state) {
       <span class="bid-display__value">${bidText}</span>
     </div>`;
   }).join('');
-
   // Bid buttons (only if it's my turn)
   let bidButtonsHTML = '';
   if (isMyTurn) {
@@ -150,41 +242,31 @@ function renderBiddingScreen(state) {
       </div>
     `;
   }
-
-  root.innerHTML = `
+  gameContentEl.innerHTML = `
     <div class="screen card-table" style="padding: 16px; gap: 12px;">
       ${renderScorePanel(state)}
-
       <div style="text-align:center; color: var(--color-accent-gold-lt); font-size: 1.1rem; font-weight: 600;">
         Round ${state.current_round} — Bidding
       </div>
-
       <div class="bid-display">${bidDisplay}</div>
-
       ${bidButtonsHTML}
-
-      <div class="ray-bubble" style="margin: 0 auto; max-width:300px;">
-        <p class="ray-bubble__text">
-          ${isMyTurn ? '"Look at your hand. Count your winners."' : '"Watch what they bid. It tells you everything."'}
-        </p>
+      <div style="display:flex; justify-content:center; margin-top: 4px;">
+        <button class="btn btn--sm btn--ray" id="btn-ask-ray">🎙 Talk to Ray</button>
       </div>
-
       <div style="margin-top:auto;">
         <div style="text-align:center; color: var(--color-text-muted); font-size: 0.8rem; margin-bottom: 8px;">Your Hand</div>
         <div class="hand-row">${handHTML}</div>
       </div>
     </div>
   `;
-
   // Wire bid buttons
   if (isMyTurn) {
-    root.querySelectorAll('.bid-btn').forEach(btn => {
+    gameContentEl.querySelectorAll('.bid-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         const bid = parseInt(btn.dataset.bid, 10);
         handleHumanBid(bid);
       });
     });
-
     const dropdown = document.getElementById('bid-high');
     if (dropdown) {
       dropdown.addEventListener('change', () => {
@@ -193,27 +275,26 @@ function renderBiddingScreen(state) {
       });
     }
   }
+  // Wire Talk to Ray button
+  document.getElementById('btn-ask-ray')?.addEventListener('click', async () => {
+    await askRay();
+  });
 }
-
 // ═════════════════════════════════════════════════════════════════════════════
 // PLAYING SCREEN
 // ═════════════════════════════════════════════════════════════════════════════
-
 function renderPlayingScreen(state) {
   const hand = sortHand(state.hands[HUMAN_SEAT], state);
   const legalCards = getHumanLegalCards();
   const isMyTurn = state.current_turn === HUMAN_SEAT;
-
   // Render hand with legal/illegal highlighting
   const handHTML = hand.map(card => {
     const isLegal = legalCards.some(c => c.id === card.id);
     const clickable = isMyTurn && isLegal;
     return renderCardHTML(card, !isLegal && isMyTurn, clickable);
   }).join('');
-
   // Render the trick area (center of table)
   const trickHTML = renderTrickArea(state);
-
   // Bid summary
   const bidSummary = PLAYER_SEATS.map(seat => {
     const label = seat === HUMAN_SEAT ? 'You' : seat.charAt(0).toUpperCase();
@@ -221,22 +302,20 @@ function renderPlayingScreen(state) {
     const tricks = state.tricks_won[seat];
     return `<span style="margin: 0 6px;">${label}: ${bid}(${tricks})</span>`;
   }).join('');
-
-  root.innerHTML = `
+  gameContentEl.innerHTML = `
     <div class="screen card-table" style="padding: 12px; gap: 8px;">
       ${renderScorePanel(state)}
-
       <div style="text-align:center; font-size: 0.85rem; color: var(--color-text-secondary);">
         ${bidSummary}
       </div>
-
       <div style="text-align:center; font-size: 0.75rem; color: var(--color-text-muted);">
         Trick ${Math.min(state.current_trick, 13)} of 13
         ${state.spades_broken ? ' · ♠ Broken' : ''}
       </div>
-
       ${trickHTML}
-
+      <div style="display:flex; justify-content:center; margin: 4px 0;">
+        <button class="btn btn--sm btn--ray" id="btn-ask-ray">🎙 Talk to Ray</button>
+      </div>
       <div style="margin-top:auto;">
         <div style="text-align:center; color: ${isMyTurn ? 'var(--color-accent-gold-lt)' : 'var(--color-text-muted)'}; font-size: 0.8rem; margin-bottom: 8px; font-weight: ${isMyTurn ? '600' : '400'};">
           ${isMyTurn ? 'Your turn — tap a card' : `Waiting for ${state.current_turn}...`}
@@ -245,10 +324,9 @@ function renderPlayingScreen(state) {
       </div>
     </div>
   `;
-
   // Wire card clicks
   if (isMyTurn) {
-    root.querySelectorAll('.card[data-card-id]').forEach(el => {
+    gameContentEl.querySelectorAll('.card[data-card-id]').forEach(el => {
       if (el.classList.contains('card--illegal')) return;
       el.addEventListener('click', () => {
         const cardId = el.dataset.cardId;
@@ -257,15 +335,16 @@ function renderPlayingScreen(state) {
       });
     });
   }
+  // Wire Talk to Ray button
+  document.getElementById('btn-ask-ray')?.addEventListener('click', async () => {
+    await askRay();
+  });
 }
-
 // ═════════════════════════════════════════════════════════════════════════════
 // TRICK AREA
 // ═════════════════════════════════════════════════════════════════════════════
-
 function renderTrickArea(state) {
   const plays = state.current_trick_plays;
-
   // Map seats to positions: north=top, east=right, south=bottom, west=left
   const positions = {
     north: { gridArea: 'top',    label: 'N' },
@@ -273,46 +352,37 @@ function renderTrickArea(state) {
     south: { gridArea: 'bottom', label: 'You' },
     west:  { gridArea: 'left',   label: 'W' },
   };
-
   const seatCards = {};
   for (const play of plays) {
     seatCards[play.seat] = play.card;
   }
-
   const slots = PLAYER_SEATS.map(seat => {
     const pos = positions[seat];
     const card = seatCards[seat];
     const cardHTML = card
       ? `<div class="card card--sm">${renderCardContent(card)}</div>`
       : `<div class="card card--sm card--empty" style="opacity:0.2;"></div>`;
-
     return `<div class="trick-slot trick-slot--${pos.gridArea}">
       <div style="font-size:0.7rem; color: var(--color-text-muted);">${pos.label}</div>
       ${cardHTML}
     </div>`;
   }).join('');
-
   return `<div class="trick-area">${slots}</div>`;
 }
-
 // ═════════════════════════════════════════════════════════════════════════════
 // ROUND END SCREEN
 // ═════════════════════════════════════════════════════════════════════════════
-
 function renderRoundEndScreen(state) {
   const lastRound = state.rounds[state.rounds.length - 1];
   if (!lastRound) return;
-
   const d = lastRound.deltas;
   const nsSign = d.northSouthDelta >= 0 ? '+' : '';
   const ewSign = d.eastWestDelta >= 0 ? '+' : '';
-
-  root.innerHTML = `
+  gameContentEl.innerHTML = `
     <div class="screen" style="align-items:center; justify-content:center; gap: 24px;">
       <h2 style="color: var(--color-accent-gold-lt); font-family: var(--font-display);">
         Round ${lastRound.round} Complete
       </h2>
-
       <div style="display:flex; gap: 32px; text-align:center;">
         <div>
           <div style="color: var(--color-text-secondary); font-size: 0.85rem;">You & North</div>
@@ -335,38 +405,32 @@ function renderRoundEndScreen(state) {
           ${d.eastWestPenaltyApplied ? '<div style="color: var(--color-danger-lt); font-size: 0.8rem;">⚠ Bag penalty! -100</div>' : ''}
         </div>
       </div>
-
-      <div class="ray-bubble" style="max-width:300px;">
-        <p class="ray-bubble__text">
-          ${getRoundEndRayLine(state, d)}
-        </p>
+      <div style="display:flex; justify-content:center;">
+        <button class="btn btn--sm btn--ray" id="btn-ask-ray-round">🎙 Talk to Ray</button>
       </div>
-
       <button class="btn btn--primary" id="btn-next-round">Next Round</button>
       <button class="btn btn--sm" id="btn-quit">Quit</button>
     </div>
   `;
-
   document.getElementById('btn-next-round')?.addEventListener('click', () => handleNextRound());
   document.getElementById('btn-quit')?.addEventListener('click', renderSplash);
+  document.getElementById('btn-ask-ray-round')?.addEventListener('click', async () => {
+    await askRay();
+  });
 }
-
 // ═════════════════════════════════════════════════════════════════════════════
 // GAME OVER SCREEN
 // ═════════════════════════════════════════════════════════════════════════════
-
 function renderGameOverScreen(state) {
   const nsTotal = state.scores.north_south.total;
   const ewTotal = state.scores.east_west.total;
   const youWon = nsTotal > ewTotal;
-
-  root.innerHTML = `
+  gameContentEl.innerHTML = `
     <div class="screen" style="align-items:center; justify-content:center; gap: 24px;">
       <div class="app-loading__spade" style="font-size: 4rem;">♠</div>
       <h1 style="font-family: var(--font-display); font-size: 2rem; color: ${youWon ? 'var(--color-success)' : 'var(--color-danger-lt)'};">
         ${youWon ? 'You Won!' : 'Game Over'}
       </h1>
-
       <div style="text-align:center;">
         <div style="font-size: 1.2rem; color: var(--color-text-primary);">
           You & North: ${nsTotal} · East & West: ${ewTotal}
@@ -375,24 +439,19 @@ function renderGameOverScreen(state) {
           ${state.rounds.length} rounds played
         </div>
       </div>
-
       <div class="ray-bubble" style="max-width:300px;">
         <p class="ray-bubble__text">
           ${youWon ? '"Now that\'s what I\'m talking about. You learning."' : '"It happens. Shuffle up, let\'s run it back."'}
         </p>
       </div>
-
       <button class="btn btn--primary" id="btn-play-again">Play Again</button>
     </div>
   `;
-
   document.getElementById('btn-play-again')?.addEventListener('click', renderModeSelect);
 }
-
 // ═════════════════════════════════════════════════════════════════════════════
 // SHARED COMPONENTS
 // ═════════════════════════════════════════════════════════════════════════════
-
 function renderScorePanel(state) {
   return `
     <div class="score-panel">
@@ -410,45 +469,152 @@ function renderScorePanel(state) {
     </div>
   `;
 }
-
 function renderCardHTML(card, isIllegal, isClickable) {
   const classes = ['card'];
   if (isIllegal) classes.push('card--illegal');
   if (isClickable) classes.push('card--playable');
-
   return `
     <div class="${classes.join(' ')}" data-card-id="${card.id}" ${isClickable ? 'role="button" tabindex="0"' : ''}>
       ${renderCardContent(card)}
     </div>
   `;
 }
-
 function renderCardContent(card) {
   const suit = card.suit;
   const rank = cardLabel(card).replace(suitSymbol(suit), '');
   const sym = suitSymbol(suit);
-
   return `
     <span class="card__rank card__rank--${suit}">${rank}</span>
     <span class="card__suit card__suit--${suit}">${sym}</span>
   `;
 }
-
-function getRoundEndRayLine(state, deltas) {
-  if (deltas.northSouthDelta >= 80) return '"That\'s a good hand right there. Keep it up."';
-  if (deltas.northSouthDelta >= 40) return '"Solid. You played that smart."';
-  if (deltas.northSouthDelta > 0) return '"You made your bid. That\'s the game."';
-  if (deltas.northSouthDelta === 0) return '"Break even ain\'t bad, but it ain\'t winning."';
-  if (deltas.northSouthDelta > -50) return '"That stings a little. Watch your count next time."';
-  return '"Rough round. Don\'t let it get in your head."';
-}
-
 // ═════════════════════════════════════════════════════════════════════════════
-// ADDITIONAL CSS (injected for new game UI elements)
+// ADDITIONAL CSS
 // ═════════════════════════════════════════════════════════════════════════════
-
 const styleEl = document.createElement('style');
 styleEl.textContent = `
+  /* ── Layout ── */
+  #app-root {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    overflow: hidden;
+  }
+  #game-content {
+    flex: 1;
+    overflow: hidden;
+    min-height: 0;
+  }
+
+  /* ── Ray Panel (persistent chat drawer) ── */
+  #ray-panel {
+    flex: 0 0 0;
+    overflow: hidden;
+    background: var(--color-bg-deep);
+    border-top: 2px solid var(--color-accent-gold);
+    transition: flex-basis 0.3s ease;
+    display: flex;
+    flex-direction: column;
+  }
+  #ray-panel.ray-panel--active {
+    flex-basis: 42vh;
+  }
+  .ray-chat-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 14px;
+    border-bottom: 1px solid rgba(200, 148, 26, 0.3);
+  }
+  .ray-chat-header__name {
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: var(--color-accent-gold-lt);
+    letter-spacing: 0.04em;
+  }
+  .ray-dismiss-btn {
+    background: none;
+    border: none;
+    color: var(--color-text-muted);
+    font-size: 1rem;
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: 4px;
+    transition: color 0.15s;
+  }
+  .ray-dismiss-btn:hover { color: var(--color-text-primary); }
+  .ray-chat-messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 10px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .ray-chat-msg {
+    max-width: 92%;
+    padding: 8px 12px;
+    border-radius: 12px;
+    font-size: 0.83rem;
+    line-height: 1.5;
+  }
+  .ray-chat-msg--ray {
+    background: rgba(200, 148, 26, 0.12);
+    border: 1px solid rgba(200, 148, 26, 0.35);
+    align-self: flex-start;
+    border-bottom-left-radius: 4px;
+  }
+  .ray-chat-msg--ray::before {
+    content: 'Uncle Ray';
+    display: block;
+    font-size: 0.68rem;
+    color: var(--color-accent-gold-lt);
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 3px;
+  }
+  .ray-chat-msg--user {
+    background: rgba(255,255,255,0.07);
+    border: 1px solid rgba(255,255,255,0.1);
+    align-self: flex-end;
+    border-bottom-right-radius: 4px;
+  }
+  .ray-chat-input-row {
+    display: flex;
+    padding: 8px 12px;
+    gap: 8px;
+    border-top: 1px solid var(--color-border);
+    align-items: center;
+  }
+  .ray-chat-input {
+    flex: 1;
+    background: var(--color-bg-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 20px;
+    color: var(--color-text-primary);
+    padding: 8px 14px;
+    font-size: 0.85rem;
+    outline: none;
+    font-family: inherit;
+  }
+  .ray-chat-input:focus {
+    border-color: var(--color-accent-gold);
+  }
+
+  /* ── Talk to Ray button ── */
+  .btn--ray {
+    background: rgba(200, 148, 26, 0.15);
+    border: 1px solid var(--color-accent-gold);
+    color: var(--color-accent-gold-lt);
+    font-size: 0.78rem;
+    padding: 6px 14px;
+  }
+  .btn--ray:hover {
+    background: rgba(200, 148, 26, 0.3);
+  }
+
+  /* ── Hand & Cards ── */
   .hand-row {
     display: flex;
     justify-content: center;
@@ -456,16 +622,13 @@ styleEl.textContent = `
     flex-wrap: wrap;
     padding: 8px 4px;
   }
-
   .hand-row .card {
     width: 54px;
     height: 76px;
     font-size: 0.85rem;
   }
-
   .hand-row .card .card__rank { font-size: 0.9rem; }
   .hand-row .card .card__suit { font-size: 1.1rem; }
-
   .card--playable {
     cursor: pointer;
     border: 2px solid var(--color-card-legal);
@@ -475,13 +638,13 @@ styleEl.textContent = `
     transform: translateY(-8px);
   }
 
+  /* ── Bidding ── */
   .bid-display {
     display: flex;
     justify-content: center;
     gap: 16px;
     padding: 8px;
   }
-
   .bid-display__seat {
     display: flex;
     flex-direction: column;
@@ -492,24 +655,20 @@ styleEl.textContent = `
     background: rgba(0,0,0,0.2);
     min-width: 50px;
   }
-
   .bid-display__seat--active {
     background: rgba(200, 148, 26, 0.2);
     border: 1px solid var(--color-accent-gold);
   }
-
   .bid-display__label {
     font-size: 0.7rem;
     color: var(--color-text-muted);
     text-transform: uppercase;
   }
-
   .bid-display__value {
     font-size: 1.2rem;
     font-weight: 700;
     color: var(--color-text-primary);
   }
-
   .bid-btn {
     width: 44px;
     height: 44px;
@@ -522,19 +681,16 @@ styleEl.textContent = `
     cursor: pointer;
     transition: all var(--transition-fast);
   }
-
   .bid-btn:hover {
     background: var(--color-accent-gold);
     color: var(--color-bg-deep);
   }
-
   .bid-btn--nil {
     width: auto;
     padding: 0 12px;
     color: var(--color-nil-active);
     border-color: var(--color-nil-active);
   }
-
   .bid-dropdown {
     padding: 8px;
     border-radius: 8px;
@@ -544,6 +700,7 @@ styleEl.textContent = `
     font-size: 0.9rem;
   }
 
+  /* ── Trick Area ── */
   .trick-area {
     display: grid;
     grid-template-areas:
@@ -558,13 +715,11 @@ styleEl.textContent = `
     padding: 16px;
     min-height: 200px;
   }
-
   .trick-slot { display: flex; flex-direction: column; align-items: center; gap: 4px; }
   .trick-slot--top { grid-area: top; }
   .trick-slot--right { grid-area: right; }
   .trick-slot--bottom { grid-area: bottom; }
   .trick-slot--left { grid-area: left; }
-
   .card--sm {
     width: 48px;
     height: 68px;
@@ -572,16 +727,14 @@ styleEl.textContent = `
   }
   .card--sm .card__rank { font-size: 0.8rem; }
   .card--sm .card__suit { font-size: 1rem; }
-
   .card--empty {
     border: 1px dashed var(--color-border);
     background: transparent;
   }
 `;
 document.head.appendChild(styleEl);
-
 // ═════════════════════════════════════════════════════════════════════════════
 // BOOT
 // ═════════════════════════════════════════════════════════════════════════════
-
+initLayout();
 renderSplash();
