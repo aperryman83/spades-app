@@ -77,8 +77,8 @@ function initLayout() {
  * Renders the player's hand into the fixed #hand-tray element.
  * Pass null to hide the tray (splash / mode-select / round-end screens).
  *
- * @param {Array|null} hand       — sorted card array, or null to hide
- * @param {Array}      legalCards — cards the player can legally play right now
+ * @param {Array|null} hand        — sorted card array, or null to hide
+ * @param {Array}      legalCards � cards the player can legally play right now
  * @param {boolean}    isMyTurn   — whether it's currently the human's turn
  * @param {string}     label      — status label above the cards
  */
@@ -132,39 +132,48 @@ function updateHandTray(hand, legalCards = [], isMyTurn = false, label = 'Your H
 // ═════════════════════════════════════════════════════════════════════════════
 function updateRayPanel() {
   if (!rayPanelEl) return;
+  const isDesktop = window.innerWidth >= 760;
   const convo = getActiveConversation();
 
-  if (!convo || !convo.isActive) {
-    rayPanelVisible = false;
-    rayPanelEl.classList.remove('ray-panel--active');
-    rayPanelEl.innerHTML = '';
-    return;
+  // On desktop: always show the panel (even without a conversation)
+  if (isDesktop) {
+    rayPanelEl.classList.add('ray-panel--active');
   }
 
-  // Auto-show whenever Ray fires a new teaching moment
-  if (convo.id !== lastShownConvoId) {
+  // Auto-show on mobile whenever Ray fires a new teaching moment
+  if (convo && convo.id !== lastShownConvoId) {
     rayPanelVisible  = true;
     lastShownConvoId = convo.id;
+    if (!isDesktop) rayPanelEl.classList.add('ray-panel--active');
   }
 
-  // Player hit X — stay hidden until they ask
-  if (!rayPanelVisible) {
-    rayPanelEl.classList.remove('ray-panel--active');
-    return;
+  // Build messages HTML (or placeholder if no conversation yet)
+  let messagesHTML = '';
+  if (convo && convo.isActive) {
+    messagesHTML = convo.messages.map(m => `
+      <div class="ray-chat-msg ray-chat-msg--${m.role === 'assistant' ? 'ray' : 'player'}">
+        ${m.content.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\n\n/g, '</p><p>').replace(/\n/g, '<br>')}
+      </div>
+    `).join('');
+  } else if (isDesktop) {
+    messagesHTML = `<div class="ray-placeholder">Ask me anything — your hand, what to bid, why something happened.</div>`;
+  } else {
+    // Mobile with no active conversation — hide panel
+    if (!rayPanelVisible) {
+      rayPanelEl.classList.remove('ray-panel--active');
+      rayPanelEl.innerHTML = '';
+      return;
+    }
   }
 
-  rayPanelEl.classList.add('ray-panel--active');
-
-  const messagesHTML = convo.messages.map(m => `
-    <div class="ray-chat-msg ray-chat-msg--${m.role === 'assistant' ? 'ray' : 'player'}">
-      ${m.content.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\n\n/g, '</p><p>').replace(/\n/g, '<br>')}
-    </div>
-  `).join('');
+  // Dismiss button: only shown on mobile (desktop panel is always open)
+  const dismissBtn = isDesktop ? '' :
+    `<button class="ray-dismiss-btn" id="ray-dismiss" title="Minimize">✕</button>`;
 
   rayPanelEl.innerHTML = `
     <div class="ray-chat-header">
       <span class="ray-chat-header__name">♠ Uncle Ray</span>
-      <button class="ray-dismiss-btn" id="ray-dismiss" title="Minimize">✕</button>
+      ${dismissBtn}
     </div>
     <div class="ray-chat-messages" id="ray-messages">${messagesHTML}</div>
     <div class="ray-chat-input-row">
@@ -184,7 +193,8 @@ function updateRayPanel() {
 
   document.getElementById('ray-dismiss')?.addEventListener('click', () => {
     rayPanelVisible = false;
-    updateRayPanel();
+    rayPanelEl.classList.remove('ray-panel--active');
+    rayPanelEl.innerHTML = '';
   });
 
   const input   = document.getElementById('ray-input');
@@ -195,6 +205,10 @@ function updateRayPanel() {
     if (!text) return;
     if (input) input.value = '';
     if (sendBtn) { sendBtn.disabled = true; sendBtn.textContent = '...'; }
+    // Auto-start a conversation if one isn't active
+    if (!isConversationActive()) {
+      await askRay();
+    }
     await sendPlayerMessage(text, getState());
     if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = 'Send'; }
     updateRayPanel();
@@ -202,7 +216,7 @@ function updateRayPanel() {
 
   sendBtn?.addEventListener('click', sendMessage);
   input?.addEventListener('keypress', e => { if (e.key === 'Enter') sendMessage(); });
-  setTimeout(() => input?.focus(), 50);
+  if (isDesktop) setTimeout(() => input?.focus(), 50);
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -319,9 +333,6 @@ function renderBiddingScreen(state) {
       </div>
       <div class="bid-display">${bidDisplay}</div>
       ${bidButtonsHTML}
-      <div style="display:flex; justify-content:center; margin-top: 4px;">
-        <button class="btn btn--sm btn--ray" id="btn-ask-ray">🎙 Talk to Ray</button>
-      </div>
     </div>
   `;
 
@@ -335,11 +346,6 @@ function renderBiddingScreen(state) {
       if (!isNaN(val)) handleHumanBid(val);
     });
   }
-
-  document.getElementById('btn-ask-ray')?.addEventListener('click', async () => {
-    rayPanelVisible = true;
-    if (isConversationActive()) { updateRayPanel(); } else { await askRay(); }
-  });
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -375,16 +381,8 @@ function renderPlayingScreen(state) {
         ${state.spades_broken ? ' · ♠ Broken' : ''}
       </div>
       ${trickHTML}
-      <div style="display:flex; justify-content:center; margin: 4px 0;">
-        <button class="btn btn--sm btn--ray" id="btn-ask-ray">🎙 Talk to Ray</button>
-      </div>
     </div>
   `;
-
-  document.getElementById('btn-ask-ray')?.addEventListener('click', async () => {
-    rayPanelVisible = true;
-    if (isConversationActive()) { updateRayPanel(); } else { await askRay(); }
-  });
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -453,19 +451,12 @@ function renderRoundEndScreen(state) {
           ${d.eastWestPenaltyApplied ? '<div style="color: var(--color-danger-lt); font-size: 0.8rem;">⚠ Bag penalty! -100</div>' : ''}
         </div>
       </div>
-      <div style="display:flex; justify-content:center;">
-        <button class="btn btn--sm btn--ray" id="btn-ask-ray-round">🎙 Talk to Ray</button>
-      </div>
       <button class="btn btn--primary" id="btn-next-round">Next Round</button>
       <button class="btn btn--sm" id="btn-quit">Quit</button>
     </div>
   `;
   document.getElementById('btn-next-round')?.addEventListener('click', () => handleNextRound());
   document.getElementById('btn-quit')?.addEventListener('click', renderSplash);
-  document.getElementById('btn-ask-ray-round')?.addEventListener('click', async () => {
-    rayPanelVisible = true;
-    if (isConversationActive()) { updateRayPanel(); } else { await askRay(); }
-  });
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -831,9 +822,9 @@ styleEl.textContent = `
     background: transparent;
   }
 
-  /* ── Desktop: Ray panel as right sidebar (≥ 760px) ──────────────────────── */
+  /* ── Desktop: Ray panel as always-visible right sidebar (≥ 760px) ──────── */
   @media (min-width: 760px) {
-    /* Switch from bottom drawer to fixed right column */
+    /* Right column — always visible, no fade/hide */
     #ray-panel {
       top: 0;
       bottom: 0 !important;
@@ -841,28 +832,32 @@ styleEl.textContent = `
       left: auto !important;
       width: 320px;
       max-height: 100vh !important;
-      overflow: hidden;
-      border-left: 1px solid var(--color-border);
-      border-top: none !important;
-      border-bottom: none !important;
-      /* Fade in/out instead of slide up */
-      transition: opacity 0.25s ease;
-      opacity: 0;
-      pointer-events: none;
-    }
-    #ray-panel.ray-panel--active {
-      max-height: 100vh !important;
       overflow-y: auto;
       border-left: 2px solid var(--color-accent-gold) !important;
       border-top: none !important;
-      opacity: 1;
-      pointer-events: auto;
+      border-bottom: none !important;
+      opacity: 1 !important;
+      pointer-events: auto !important;
+      transition: none;
+    }
+    #ray-panel.ray-panel--active {
+      opacity: 1 !important;
+      pointer-events: auto !important;
+    }
+    /* Game content fills the column left of the sidebar */
+    #game-content {
+      width: calc(100vw - 320px) !important;
+      max-width: none !important;
+    }
+    /* Override any max-width on #app-root set by style.css */
+    #app-root {
+      max-width: none !important;
     }
     /* Hand tray stops at the left edge of Ray's column */
     #hand-tray {
       right: 320px !important;
     }
-    /* Game content no longer needs Ray-panel bottom padding */
+    /* Bottom padding only needs to clear the hand tray height, not Ray panel */
     .game-screen-padded {
       padding-bottom: ${HAND_TRAY_HEIGHT + 16}px !important;
     }
