@@ -146,7 +146,8 @@ function updateHandTray(hand, legalCards = [], isMyTurn = false, label = 'Your H
         const card = _currentHand.find(c => c.id === cardId);
         if (!card) return;
         if (askRayModeOn) {
-          if (!isConversationActive()) await askRay();
+          dismissConversation(); // always fresh context when tapping a new card
+          await askRay();
           const suitNames = { S: 'spades', H: 'hearts', D: 'diamonds', C: 'clubs' };
           const rank = cardLabel(card).replace(suitSymbol(card.suit), '');
           const suit = suitNames[card.suit] || card.suit;
